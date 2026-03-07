@@ -6,6 +6,8 @@ pub enum Key {
     Char(char),
     Enter,
     Backspace,
+    Tab,
+    ShiftTab,
     Up,
     Down,
     Left,
@@ -34,6 +36,7 @@ pub fn read_key(tty: &mut File) -> io::Result<Key> {
     match buf[0] {
         0x01 => Ok(Key::CtrlA),
         0x03 => Ok(Key::CtrlC),
+        0x09 => Ok(Key::Tab),
         0x04 => Ok(Key::CtrlD),
         0x05 => Ok(Key::CtrlE),
         0x0a => Ok(Key::CtrlJ),
@@ -62,10 +65,33 @@ fn read_escape_seq(tty: &mut File) -> io::Result<Key> {
             [b'[', b'B'] => Ok(Key::Down),
             [b'[', b'C'] => Ok(Key::Right),
             [b'[', b'D'] => Ok(Key::Left),
+            [b'[', b'Z'] => Ok(Key::ShiftTab),
+            // Legacy mouse: \x1b[M + 3 bytes (button, x, y)
+            [b'[', b'M'] => {
+                let mut discard = [0u8; 3];
+                let _ = tty.read(&mut discard);
+                Ok(Key::Unknown)
+            }
+            // SGR mouse: \x1b[< + digits/semicolons + M/m
+            [b'[', b'<'] => {
+                drain_until_alpha(tty);
+                Ok(Key::Unknown)
+            }
             [b'[', _] => Ok(Key::Unknown),
             _ => Ok(Key::Escape),
         },
         _ => Ok(Key::Escape),
+    }
+}
+
+fn drain_until_alpha(tty: &mut File) {
+    let mut b = [0u8; 1];
+    loop {
+        match tty.read(&mut b) {
+            Ok(1) if b[0].is_ascii_alphabetic() => break,
+            Ok(1) => continue,
+            _ => break,
+        }
     }
 }
 

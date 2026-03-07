@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossterm::cursor;
 use crossterm::style::{Attribute, Color, SetAttribute, SetBackgroundColor, SetForegroundColor};
+use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::terminal::{self, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, queue};
 use unicode_width::UnicodeWidthChar;
@@ -29,6 +30,9 @@ const COLOR_TITLE: Color = Color::Rgb { r: 180, g: 180, b: 180 };
 const COLOR_DIM: Color = Color::Rgb { r: 90, g: 90, b: 90 };
 const COLOR_SELECTED_BG: Color = Color::Rgb { r: 60, g: 60, b: 65 };
 const COLOR_CURSOR: Color = Color::Rgb { r: 200, g: 200, b: 200 };
+const COLOR_MULTI: Color = Color::Rgb { r: 255, g: 200, b: 60 };
+const COLOR_WARN_BG: Color = Color::Rgb { r: 120, g: 40, b: 40 };
+const COLOR_WARN_FG: Color = Color::Rgb { r: 255, g: 220, b: 220 };
 
 // ── TTY helpers ─────────────────────────────────────────────────────────
 
@@ -127,12 +131,12 @@ pub fn run(entries: Vec<HistoryEntry>) -> io::Result<Option<String>> {
     // Override crossterm's VMIN=1/VTIME=0 with VMIN=0/VTIME=1 (100ms read timeout)
     set_read_timeout(tty_fd, 1);
 
-    execute!(tty_w, EnterAlternateScreen, cursor::Hide)?;
+    execute!(tty_w, EnterAlternateScreen, EnableMouseCapture, cursor::Hide)?;
 
     let mut entries = entries;
     let result = run_loop(&mut tty_r, &mut tty_w, tty_fd, &mut entries);
 
-    execute!(tty_w, cursor::Show, LeaveAlternateScreen)?;
+    execute!(tty_w, cursor::Show, DisableMouseCapture, LeaveAlternateScreen)?;
     terminal::disable_raw_mode()?;
 
     // Restore original SIGWINCH handler
@@ -151,6 +155,8 @@ fn run_loop(
     let mut cursor_pos: usize = 0;
     let mut selected: usize = 0;
     let mut scroll_offset: usize = 0;
+    let mut multi_select: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut show_help = false;
 
     loop {
         let (cols, rows) = tty_size(tty_fd);
@@ -173,7 +179,10 @@ fn run_loop(
         }
 
         let mut buf: Vec<u8> = Vec::with_capacity(8192);
-        render_frame(&mut buf, &query, cursor_pos, &results, selected, scroll_offset, cols, rows, entries.len())?;
+        render_frame(&mut buf, &query, cursor_pos, &results, selected, scroll_offset, cols, rows, entries.len(), &multi_select)?;
+        if show_help {
+            render_help(&mut buf, cols, rows)?;
+        }
         tty_w.write_all(&buf)?;
         tty_w.flush()?;
 
@@ -186,12 +195,40 @@ fn run_loop(
             }
         };
 
+        if show_help {
+            show_help = false;
+            continue;
+        }
+
         let char_count = query.chars().count();
 
         match key {
-            Key::CtrlC | Key::CtrlQ | Key::Escape => return Ok(None),
+            Key::CtrlC | Key::CtrlQ | Key::Escape => {
+                if !multi_select.is_empty() {
+                    multi_select.clear();
+                } else {
+                    return Ok(None);
+                }
+            }
             Key::Enter => {
                 return Ok(results.get(selected).map(|r| r.entry.command.clone()));
+            }
+            Key::Tab => {
+                if let Some(result) = results.get(selected) {
+                    let cmd = result.entry.command.clone();
+                    if multi_select.contains(&cmd) {
+                        multi_select.remove(&cmd);
+                    } else {
+                        multi_select.insert(cmd);
+                    }
+                    if selected + 1 < results.len() { selected += 1; }
+                }
+            }
+            Key::ShiftTab => {
+                if let Some(result) = results.get(selected) {
+                    multi_select.remove(&result.entry.command);
+                }
+                selected = selected.saturating_sub(1);
             }
             Key::Backspace => {
                 if cursor_pos > 0 {
@@ -239,23 +276,42 @@ fn run_loop(
             }
             Key::CtrlX => {
                 let results = history::search_adaptive(entries, &query);
-                if let Some(result) = results.get(selected) {
-                    let cmd = result.entry.command.clone();
-                    let (cols, rows) = tty_size(tty_fd);
-                    let mut cbuf: Vec<u8> = Vec::with_capacity(1024);
-                    let prompt = format!(" Delete? (y/N): {}", truncate_str(&cmd, cols as usize - 20));
-                    let prompt_row = rows.saturating_sub(2);
-                    queue!(cbuf, cursor::MoveTo(0, prompt_row))?;
-                    queue!(cbuf, SetBackgroundColor(Color::Rgb { r: 120, g: 40, b: 40 }))?;
-                    queue!(cbuf, SetForegroundColor(Color::Rgb { r: 255, g: 220, b: 220 }))?;
-                    write!(cbuf, "{prompt}")?;
-                    let pad = (cols as usize).saturating_sub(str_width(&prompt));
-                    for _ in 0..pad { write!(cbuf, " ")?; }
-                    queue!(cbuf, SetAttribute(Attribute::Reset))?;
-                    tty_w.write_all(&cbuf)?;
-                    tty_w.flush()?;
+                if !multi_select.is_empty() {
+                    // Multi-delete: collect commands to delete
+                    let targets: Vec<String> = multi_select.iter().cloned().collect();
+                    let count = targets.len();
+                    let prompt = format!(" Delete {} entries? (y/N/C-c cancel): ", count);
+                    show_prompt_bar(tty_w, tty_fd, &prompt)?;
 
-                    // Switch to blocking read for confirmation
+                    // Confirmation loop: y confirms, Ctrl-C clears, others ignored
+                    set_read_blocking(tty_fd);
+                    let action = loop {
+                        match input::read_key(tty_r)? {
+                            Key::Char('y') => break true,
+                            Key::Char('n') | Key::Char('N') | Key::Escape => break false,
+                            Key::CtrlC => {
+                                multi_select.clear();
+                                break false;
+                            }
+                            _ => continue,
+                        }
+                    };
+                    set_read_timeout(tty_fd, 1);
+
+                    if action {
+                        for cmd in &targets {
+                            history::delete_command(entries, cmd);
+                        }
+                        multi_select.clear();
+                        selected = 0;
+                        scroll_offset = 0;
+                    }
+                } else if let Some(result) = results.get(selected) {
+                    // Single delete
+                    let cmd = result.entry.command.clone();
+                    let prompt = format!(" Delete? (y/N): {}", truncate_str(&cmd, cols as usize - 20));
+                    show_prompt_bar(tty_w, tty_fd, &prompt)?;
+
                     set_read_blocking(tty_fd);
                     let confirmed = matches!(input::read_key(tty_r)?, Key::Char('y'));
                     set_read_timeout(tty_fd, 1);
@@ -268,6 +324,9 @@ fn run_loop(
                     }
                 }
             }
+            Key::CtrlSlash | Key::Char('?') => {
+                show_help = true;
+            }
             Key::Char(c) => {
                 let byte_idx = query.char_indices().nth(cursor_pos).map(|(i, _)| i).unwrap_or(query.len());
                 query.insert(byte_idx, c);
@@ -275,20 +334,25 @@ fn run_loop(
                 selected = 0;
                 scroll_offset = 0;
             }
-            Key::CtrlSlash => {
-                let (cols, rows) = tty_size(tty_fd);
-                let mut hbuf: Vec<u8> = Vec::with_capacity(4096);
-                render_help(&mut hbuf, cols, rows)?;
-                tty_w.write_all(&hbuf)?;
-                tty_w.flush()?;
-                // Wait for any key to dismiss (blocking)
-                set_read_blocking(tty_fd);
-                let _ = input::read_key(tty_r);
-                set_read_timeout(tty_fd, 1);
-            }
             Key::Unknown => {}
         }
     }
+}
+
+fn show_prompt_bar(tty_w: &mut TtyOut, tty_fd: i32, prompt: &str) -> io::Result<()> {
+    let (cols, rows) = tty_size(tty_fd);
+    let mut cbuf: Vec<u8> = Vec::with_capacity(1024);
+    let prompt_row = rows.saturating_sub(2);
+    queue!(cbuf, cursor::MoveTo(0, prompt_row))?;
+    queue!(cbuf, SetBackgroundColor(COLOR_WARN_BG), SetForegroundColor(COLOR_WARN_FG))?;
+    let display = truncate_str(prompt, cols as usize);
+    write!(cbuf, "{display}")?;
+    let pad = (cols as usize).saturating_sub(str_width(&display));
+    for _ in 0..pad { write!(cbuf, " ")?; }
+    queue!(cbuf, SetAttribute(Attribute::Reset))?;
+    tty_w.write_all(&cbuf)?;
+    tty_w.flush()?;
+    Ok(())
 }
 
 // ── Help overlay ────────────────────────────────────────────────────────
@@ -299,12 +363,14 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("C-u",            "Half page up"),
     ("C-d",            "Half page down"),
     ("Enter",          "Select command"),
-    ("Esc  C-c  C-q",  "Quit"),
+    ("Tab",            "Multi-select toggle"),
+    ("Shift-Tab",      "Deselect + move up"),
+    ("C-x",            "Delete selected"),
+    ("Esc  C-c  C-q",  "Quit / clear select"),
     ("← / →",          "Cursor move"),
     ("C-a / C-e",      "Cursor home/end"),
     ("C-l",            "Delete to end"),
-    ("C-x",            "Delete entry"),
-    ("C-? / C-/",      "This help"),
+    ("?  C-/",         "This help"),
 ];
 
 const COLOR_HELP_BG: Color = Color::Rgb { r: 35, g: 35, b: 40 };
@@ -398,6 +464,7 @@ fn render_frame(
     cols: u16,
     rows: u16,
     total_count: usize,
+    multi_select: &std::collections::HashSet<String>,
 ) -> io::Result<()> {
     let max_items = (rows as usize).saturating_sub(6);
     let w = cols as usize;
@@ -470,8 +537,14 @@ fn render_frame(
         write!(buf, "│")?;
 
         if let Some(result) = results.get(result_idx) {
+            let is_multi = multi_select.contains(&result.entry.command);
             if result_idx == selected {
                 queue!(buf, SetBackgroundColor(COLOR_SELECTED_BG))?;
+            }
+            if is_multi {
+                queue!(buf, SetForegroundColor(COLOR_MULTI))?;
+                write!(buf, " * ")?;
+            } else if result_idx == selected {
                 queue!(buf, SetForegroundColor(COLOR_TEXT))?;
                 write!(buf, " > ")?;
             } else {
@@ -485,11 +558,17 @@ fn render_frame(
         right_border(buf, rc, row, "│")?;
     }
 
-    // Bottom border
+    // Bottom border with help hint
     let bottom = rows.saturating_sub(1).min(3 + max_items as u16);
     queue!(buf, cursor::MoveTo(0, bottom), SetForegroundColor(COLOR_BORDER))?;
     write!(buf, "╰")?;
-    write_hline(buf, w.saturating_sub(2))?;
+    let hint = " ?: help ";
+    let hint_w = str_width(hint);
+    let fill_w = w.saturating_sub(2 + hint_w);
+    write_hline(buf, fill_w)?;
+    queue!(buf, SetForegroundColor(COLOR_DIM))?;
+    write!(buf, "{hint}")?;
+    queue!(buf, SetForegroundColor(COLOR_BORDER))?;
     right_border(buf, rc, bottom, "╯")?;
 
     queue!(buf, SetAttribute(Attribute::Reset))?;

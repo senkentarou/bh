@@ -1,6 +1,7 @@
-# bh - Bash History Search
+# bh — Bash History Search
 
-スマートランキング付きのインタラクティブ bash history 検索 CLI。
+Fast, interactive bash history search with frequency-weighted smart ranking.
+A lightweight Rust TUI alternative to `Ctrl-R`.
 
 ## Install
 
@@ -11,67 +12,71 @@ cargo install --path .
 ## Usage
 
 ```bash
-# インタラクティブ TUI モード
+# Interactive TUI mode
 bh
 
-# テーブル形式で標準出力（サマリ統計付き）
+# Table output with summary stats
 bh --table
 
-# JSON 形式で標準出力（AI 分析用）
+# JSON output (useful for AI analysis)
 bh --json
 
-# 上位 N 件に絞って出力
+# Limit to top N entries
 bh --json -n 50
+```
+
+### Shell integration
+
+Add to your `.bashrc` to bind `bh` to `Ctrl-R`:
+
+```bash
+bh-search() {
+  local cmd
+  cmd=$(bh)
+  if [ -n "$cmd" ]; then
+    READLINE_LINE="$cmd"
+    READLINE_POINT=${#cmd}
+  fi
+}
+bind -x '"\C-r": bh-search'
 ```
 
 ## Features
 
-### インタラクティブ検索（TUI モード）
+### Interactive search (TUI)
 
-`bh` を引数なしで実行するとインタラクティブモードが起動する。
+Run `bh` with no arguments to launch the interactive mode.
 
-- 部分一致検索。大文字小文字を区別しない
-- ヒットした文字列を黄色でハイライト表示
-- 各コマンドの出現回数を左側に表示
-- Enter で選択したコマンドを stdout に出力
+- Incremental case-insensitive substring search
+- Match highlighting
+- Frequency count displayed per command
+- `Enter` outputs the selected command to stdout
 
-#### キーバインド
+Press `C-?` / `C-/` to show the full keybinding list.
 
-| キー | 動作 |
-|---|---|
-| 文字入力 | インクリメンタル検索 |
-| `↑` / `Ctrl-p` | カーソル上移動 |
-| `↓` / `Ctrl-n` | カーソル下移動 |
-| `Enter` | 選択コマンドを stdout に出力して終了 |
-| `Backspace` | 1 文字削除 |
-| `Ctrl-u` | クエリ全消去 |
-| `Esc` / `Ctrl-c` | キャンセル終了 |
+### Smart ranking
 
-### スマートランキング
+Score = `(recency × 0.6 + log(1 + frequency) × 0.4) × noise_penalty`
 
-スコア = `(recency × 0.6 + log(1 + frequency) × 0.4) × noise_penalty`
-
-| 要素 | 重み | 説明 |
+| Factor | Weight | Description |
 |---|---|---|
-| Recency | 0.6 | ファイル内の出現位置。最後に使ったものほど高スコア |
-| Frequency | 0.4 | 出現回数の対数スケール。極端な偏りを抑制 |
-| Noise penalty | ×0.3 | 1 回しか使っていないコマンドに適用。打ち間違い・one-shot コマンドを降格 |
+| Recency | 0.6 | Position in history file — recently used commands rank higher |
+| Frequency | 0.4 | Log-scaled occurrence count to prevent extreme skew |
+| Noise penalty | ×0.3 | Applied to single-use commands to demote typos and one-offs |
 
-### ノイズ適応フィルタ
+### Adaptive noise filter
 
-検索結果の件数に応じてフィルタ閾値を動的に変更する。
+The filter threshold adjusts dynamically based on result count:
 
-| 条件 | 挙動 |
+| Condition | Behavior |
 |---|---|
-| クエリなし | 2 回以上使ったコマンドのみ表示 |
-| 検索結果 ≤ 20 件 | 全件表示（低頻度コマンドも含む） |
-| 検索結果 > 20 件 | 上位 1/3 のスコアの 50% を閾値として低スコアをカット |
+| No query | Show only commands used 2+ times |
+| ≤ 20 results | Show all (including low-frequency) |
+| > 20 results | Cut entries below 50% of the top-third score |
 
-### 標準出力エクスポート
+### Export
 
-AI による分析や、alias / skill 化の判断材料として使う。
-
-#### Table 形式 (`--table`)
+#### Table (`--table`)
 
 ```
 Rank   Freq     Command
@@ -79,7 +84,7 @@ Rank   Freq     Command
 1      86       claude
 2      50       cargo tauri dev
 3      45       bun dev
-...
+
 Total unique commands: 150
 Total executions: 1200
 Single-use commands: 80 (53%)
@@ -90,7 +95,7 @@ Top 20 base commands:
     56x  cargo
 ```
 
-#### JSON 形式 (`--json`)
+#### JSON (`--json`)
 
 ```json
 [
@@ -103,13 +108,17 @@ Top 20 base commands:
 ]
 ```
 
-## Tech Stack
+## Data source
+
+Reads `~/.bash_history` (read-only). The only write operation is `C-x` (delete entry), which removes the selected command from both memory and the history file.
+
+## Tech stack
 
 - Rust (2024 edition)
-- [ratatui](https://github.com/ratatui/ratatui) - TUI フレームワーク
-- [crossterm](https://github.com/crossterm-rs/crossterm) - ターミナルバックエンド
-- [clap](https://github.com/clap-rs/clap) - CLI パーサ
+- [crossterm](https://github.com/crossterm-rs/crossterm) — terminal control
+- [clap](https://github.com/clap-rs/clap) — CLI argument parsing
+- No async runtime, no TUI framework — raw escape sequences for minimal overhead
 
-## Data Source
+## License
 
-`~/.bash_history` を読み取る（read-only）。ファイルへの書き込みは一切行わない。
+MIT

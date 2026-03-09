@@ -13,6 +13,9 @@ Download the latest binary from [GitHub Releases](../../releases/latest) and pla
 # Apple Silicon Mac
 curl -sL https://github.com/senkentarou/bh/releases/latest/download/bh-v0.1.0-aarch64-apple-darwin.tar.gz | tar xz
 sudo mv bh-v0.1.0-aarch64-apple-darwin/bh /usr/local/bin/
+
+# macOS Gatekeeper の警告が出る場合
+xattr -d com.apple.quarantine /usr/local/bin/bh
 ```
 
 ### Build from source

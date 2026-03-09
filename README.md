@@ -10,7 +10,7 @@ A lightweight Rust TUI alternative to `Ctrl-R`.
 Download the latest binary from [GitHub Releases](../../releases/latest) and place it in your `PATH`:
 
 ```bash
-# Example for Apple Silicon Mac
+# Apple Silicon Mac
 curl -sL https://github.com/senkentarou/bh/releases/latest/download/bh-v0.1.0-aarch64-apple-darwin.tar.gz | tar xz
 sudo mv bh-v0.1.0-aarch64-apple-darwin/bh /usr/local/bin/
 ```
@@ -20,6 +20,17 @@ sudo mv bh-v0.1.0-aarch64-apple-darwin/bh /usr/local/bin/
 ```bash
 cargo install --path .
 ```
+
+## Release
+
+```bash
+# 1. Update version in Cargo.toml
+# 2. Commit the change
+# 3. Run:
+./release.sh
+```
+
+This tags the current commit with the version from `Cargo.toml` and pushes to GitHub, triggering the CI to build and publish binaries.
 
 ## Usage
 

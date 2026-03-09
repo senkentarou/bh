@@ -158,6 +158,8 @@ fn run_loop(
     let mut multi_select: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut show_help = false;
 
+    let mut need_redraw = true;
+
     loop {
         let (cols, rows) = tty_size(tty_fd);
         let max_items = (rows as usize).saturating_sub(6);
@@ -178,22 +180,30 @@ fn run_loop(
             scroll_offset = selected - max_items + 1;
         }
 
-        let mut buf: Vec<u8> = Vec::with_capacity(8192);
-        render_frame(&mut buf, &query, cursor_pos, &results, selected, scroll_offset, cols, rows, entries.len(), &multi_select)?;
-        if show_help {
-            render_help(&mut buf, cols, rows)?;
+        if need_redraw {
+            let mut buf: Vec<u8> = Vec::with_capacity(8192);
+            render_frame(&mut buf, &query, cursor_pos, &results, selected, scroll_offset, cols, rows, entries.len(), &multi_select)?;
+            if show_help {
+                render_help(&mut buf, cols, rows)?;
+            }
+            tty_w.write_all(&buf)?;
+            tty_w.flush()?;
+            need_redraw = false;
         }
-        tty_w.write_all(&buf)?;
-        tty_w.flush()?;
 
-        // Read key (returns None on VTIME timeout → re-render)
+        // Read key (returns None on VTIME timeout)
         let key = match try_read_key(tty_r)? {
             Some(k) => k,
             None => {
-                RESIZED.swap(false, Ordering::Relaxed);
+                // Only redraw on resize; otherwise just wait for input
+                if RESIZED.swap(false, Ordering::Relaxed) {
+                    need_redraw = true;
+                }
                 continue;
             }
         };
+
+        need_redraw = true;
 
         if show_help {
             show_help = false;
@@ -376,13 +386,25 @@ const HELP_LINES: &[(&str, &str)] = &[
 const COLOR_HELP_BG: Color = Color::Rgb { r: 35, g: 35, b: 40 };
 
 fn render_help(buf: &mut Vec<u8>, cols: u16, rows: u16) -> io::Result<()> {
+    let pad_l: usize = 4;  // left padding inside box
+    let pad_r: usize = 4;  // right padding inside box
     let key_col: usize = 16;
+    let gap: usize = 3;    // gap between key and desc columns
     let desc_col: usize = 19;
-    let inner: usize = key_col + desc_col; // 35
-    let box_w = (inner + 2) as u16; // 37 (+ borders)
-    let box_h = HELP_LINES.len() as u16 + 4;
+    let inner: usize = pad_l + key_col + gap + desc_col + pad_r;
+    let box_w = (inner + 2) as u16; // + borders
+    let box_h = HELP_LINES.len() as u16 + 6; // +2 top blank, +2 bottom (hint + blank)
     let x = cols.saturating_sub(box_w) / 2;
     let y = rows.saturating_sub(box_h) / 2;
+
+    // Helper: fill a row with background
+    let fill_row = |buf: &mut Vec<u8>, row: u16| -> io::Result<()> {
+        queue!(buf, cursor::MoveTo(x, row), SetBackgroundColor(COLOR_HELP_BG), SetForegroundColor(COLOR_BORDER))?;
+        write!(buf, "│")?;
+        for _ in 0..inner { write!(buf, " ")?; }
+        write!(buf, "│")?;
+        Ok(())
+    };
 
     // Top border
     queue!(buf, cursor::MoveTo(x, y), SetBackgroundColor(COLOR_HELP_BG), SetForegroundColor(COLOR_BORDER))?;
@@ -393,37 +415,42 @@ fn render_help(buf: &mut Vec<u8>, cols: u16, rows: u16) -> io::Result<()> {
     for _ in 0..inner.saturating_sub(11) { write!(buf, "─")?; }
     write!(buf, "╮")?;
 
-    // Blank line
-    queue!(buf, cursor::MoveTo(x, y + 1), SetBackgroundColor(COLOR_HELP_BG), SetForegroundColor(COLOR_BORDER))?;
-    write!(buf, "│")?;
-    for _ in 0..inner as u16 { write!(buf, " ")?; }
-    write!(buf, "│")?;
+    // Blank lines (top padding)
+    fill_row(buf, y + 1)?;
+    fill_row(buf, y + 2)?;
 
     // Help lines
     for (i, (key, desc)) in HELP_LINES.iter().enumerate() {
-        let row = y + 2 + i as u16;
+        let row = y + 3 + i as u16;
         queue!(buf, cursor::MoveTo(x, row), SetBackgroundColor(COLOR_HELP_BG), SetForegroundColor(COLOR_BORDER))?;
         write!(buf, "│")?;
         queue!(buf, SetForegroundColor(COLOR_MATCH))?;
-        write!(buf, "  {key:<w$}", w = key_col - 2)?;
+        write!(buf, "{:>pad_l$}{key:<kw$}", "", pad_l = pad_l, kw = key_col)?;
+        queue!(buf, SetForegroundColor(COLOR_DIM))?;
+        for _ in 0..gap { write!(buf, " ")?; }
         queue!(buf, SetForegroundColor(COLOR_TEXT))?;
-        write!(buf, " {desc:<w$}", w = desc_col - 1)?;
+        write!(buf, "{desc:<dw$}", dw = desc_col)?;
+        for _ in 0..pad_r { write!(buf, " ")?; }
         queue!(buf, SetForegroundColor(COLOR_BORDER))?;
         write!(buf, "│")?;
     }
 
+    // Blank line before hint
+    let blank_row = y + 3 + HELP_LINES.len() as u16;
+    fill_row(buf, blank_row)?;
+
     // Hint line
-    let hint_row = y + 2 + HELP_LINES.len() as u16;
+    let hint_row = blank_row + 1;
     let hint = "Press any key to close";
     let hint_w = hint.len();
-    let pad_l = inner.saturating_sub(hint_w) / 2;
-    let pad_r = inner.saturating_sub(hint_w).saturating_sub(pad_l);
+    let pad_hint_l = inner.saturating_sub(hint_w) / 2;
+    let pad_hint_r = inner.saturating_sub(hint_w).saturating_sub(pad_hint_l);
     queue!(buf, cursor::MoveTo(x, hint_row), SetBackgroundColor(COLOR_HELP_BG), SetForegroundColor(COLOR_BORDER))?;
     write!(buf, "│")?;
     queue!(buf, SetForegroundColor(COLOR_DIM))?;
-    for _ in 0..pad_l { write!(buf, " ")?; }
+    for _ in 0..pad_hint_l { write!(buf, " ")?; }
     write!(buf, "{hint}")?;
-    for _ in 0..pad_r { write!(buf, " ")?; }
+    for _ in 0..pad_hint_r { write!(buf, " ")?; }
     queue!(buf, SetForegroundColor(COLOR_BORDER))?;
     write!(buf, "│")?;
 
@@ -470,7 +497,7 @@ fn render_frame(
     let w = cols as usize;
     let rc = cols.saturating_sub(1); // right-border column
 
-    queue!(buf, SetAttribute(Attribute::Reset), cursor::MoveTo(0, 0), terminal::Clear(ClearType::All))?;
+    queue!(buf, SetAttribute(Attribute::Reset), cursor::MoveTo(0, 0), terminal::Clear(ClearType::CurrentLine))?;
 
     // Row 0: top border with title
     queue!(buf, SetForegroundColor(COLOR_BORDER))?;
@@ -483,7 +510,7 @@ fn render_frame(
     right_border(buf, rc, 0, "╮")?;
 
     // Row 1: input line
-    queue!(buf, cursor::MoveTo(0, 1), SetForegroundColor(COLOR_BORDER))?;
+    queue!(buf, cursor::MoveTo(0, 1), terminal::Clear(ClearType::CurrentLine), SetForegroundColor(COLOR_BORDER))?;
     write!(buf, "│")?;
     queue!(buf, SetForegroundColor(COLOR_TEXT))?;
     write!(buf, " > ")?;
@@ -515,7 +542,7 @@ fn render_frame(
     right_border(buf, rc, 1, "│")?;
 
     // Row 2: separator with count on the right
-    queue!(buf, cursor::MoveTo(0, 2), SetForegroundColor(COLOR_BORDER))?;
+    queue!(buf, cursor::MoveTo(0, 2), terminal::Clear(ClearType::CurrentLine), SetForegroundColor(COLOR_BORDER))?;
     let count_display = format!(" {}/{} ", results.len(), total_count);
     let count_w = str_width(&count_display);
     let fill = w.saturating_sub(1 + count_w + 1);
@@ -533,7 +560,7 @@ fn render_frame(
         let row = 3 + i as u16;
         if row >= rows.saturating_sub(1) { break; }
 
-        queue!(buf, cursor::MoveTo(0, row), SetForegroundColor(COLOR_BORDER))?;
+        queue!(buf, cursor::MoveTo(0, row), terminal::Clear(ClearType::CurrentLine), SetForegroundColor(COLOR_BORDER))?;
         write!(buf, "│")?;
 
         if let Some(result) = results.get(result_idx) {
@@ -560,7 +587,7 @@ fn render_frame(
 
     // Bottom border with help hint
     let bottom = rows.saturating_sub(1).min(3 + max_items as u16);
-    queue!(buf, cursor::MoveTo(0, bottom), SetForegroundColor(COLOR_BORDER))?;
+    queue!(buf, cursor::MoveTo(0, bottom), terminal::Clear(ClearType::CurrentLine), SetForegroundColor(COLOR_BORDER))?;
     write!(buf, "╰")?;
     let hint = " ?: help ";
     let hint_w = str_width(hint);
@@ -571,17 +598,19 @@ fn render_frame(
     queue!(buf, SetForegroundColor(COLOR_BORDER))?;
     right_border(buf, rc, bottom, "╯")?;
 
+    // Clear any stale rows below the bottom border
+    for r in (bottom + 1)..rows {
+        queue!(buf, cursor::MoveTo(0, r), terminal::Clear(ClearType::CurrentLine))?;
+    }
+
     queue!(buf, SetAttribute(Attribute::Reset))?;
 
     Ok(())
 }
 
 fn render_entry(buf: &mut Vec<u8>, result: &SearchResult, available: usize, is_selected: bool) -> io::Result<()> {
-    let freq_str = format!(" {}x", result.entry.frequency);
-    let freq_w = str_width(&freq_str);
-    let cmd_max = available.saturating_sub(freq_w + 1); // +1 for potential ellipsis
-
     let cmd = &result.entry.command;
+    let cmd_max = available;
     let mut written: usize = 0;
     let mut in_hl = false;
 
@@ -596,7 +625,6 @@ fn render_entry(buf: &mut Vec<u8>, result: &SearchResult, available: usize, is_s
                 }
             }
             write!(buf, "…")?;
-            written += 1;
             break;
         }
 
@@ -616,16 +644,6 @@ fn render_entry(buf: &mut Vec<u8>, result: &SearchResult, available: usize, is_s
     if in_hl {
         queue!(buf, SetForegroundColor(COLOR_TEXT))?;
     }
-
-    // Fill remaining space, then frequency on the right
-    let remaining = available.saturating_sub(written + freq_w);
-    for _ in 0..remaining {
-        write!(buf, " ")?;
-    }
-
-    // Frequency on the right in dim color
-    queue!(buf, SetForegroundColor(COLOR_DIM))?;
-    write!(buf, "{freq_str}")?;
 
     Ok(())
 }

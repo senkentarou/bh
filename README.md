@@ -5,6 +5,18 @@ A lightweight Rust TUI alternative to `Ctrl-R`.
 
 ## Install
 
+### Pre-built binary (recommended)
+
+Download the latest binary from [GitHub Releases](../../releases/latest) and place it in your `PATH`:
+
+```bash
+# Example for Apple Silicon Mac
+curl -sL https://github.com/senkentarou/bh/releases/latest/download/bh-v0.1.0-aarch64-apple-darwin.tar.gz | tar xz
+sudo mv bh-v0.1.0-aarch64-apple-darwin/bh /usr/local/bin/
+```
+
+### Build from source
+
 ```bash
 cargo install --path .
 ```

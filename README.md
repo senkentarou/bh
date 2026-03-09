@@ -15,7 +15,7 @@ curl -sL https://github.com/senkentarou/bh/releases/latest/download/bh-v0.1.0-aa
 sudo mv bh-v0.1.0-aarch64-apple-darwin/bh /usr/local/bin/
 
 # macOS Gatekeeper の警告が出る場合
-xattr -d com.apple.quarantine /usr/local/bin/bh
+xattr -cr /usr/local/bin/bh
 ```
 
 ### Build from source

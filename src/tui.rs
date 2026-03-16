@@ -12,6 +12,10 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::history::{self, HistoryEntry, SearchResult};
 use crate::input::{self, Key};
+use crate::labels::Label;
+use crate::stats::Stats;
+
+use std::collections::HashMap;
 
 // ── SIGWINCH handling ──────────────────────────────────────────────────
 
@@ -33,6 +37,9 @@ const COLOR_CURSOR: Color = Color::Rgb { r: 200, g: 200, b: 200 };
 const COLOR_MULTI: Color = Color::Rgb { r: 255, g: 200, b: 60 };
 const COLOR_WARN_BG: Color = Color::Rgb { r: 120, g: 40, b: 40 };
 const COLOR_WARN_FG: Color = Color::Rgb { r: 255, g: 220, b: 220 };
+const COLOR_LABEL_NEW: Color = Color::Rgb { r: 80, g: 200, b: 200 };
+const COLOR_LABEL_HOT: Color = Color::Rgb { r: 255, g: 120, b: 80 };
+const COLOR_LABEL_TOP: Color = Color::Rgb { r: 255, g: 200, b: 60 };
 
 // ── TTY helpers ─────────────────────────────────────────────────────────
 
@@ -115,7 +122,11 @@ fn try_read_key(tty_r: &mut File) -> io::Result<Option<Key>> {
 
 // ── Entry point ─────────────────────────────────────────────────────────
 
-pub fn run(entries: Vec<HistoryEntry>) -> io::Result<Option<String>> {
+pub fn run(
+    entries: Vec<HistoryEntry>,
+    mut stats_data: Option<&mut Stats>,
+    label_map: &HashMap<String, Label>,
+) -> io::Result<Option<String>> {
     let mut tty_r = File::options().read(true).open("/dev/tty")?;
     let tty_fd = tty_r.as_raw_fd();
     let mut tty_w = TtyOut(File::options().write(true).open("/dev/tty")?);
@@ -134,7 +145,7 @@ pub fn run(entries: Vec<HistoryEntry>) -> io::Result<Option<String>> {
     execute!(tty_w, EnterAlternateScreen, EnableMouseCapture, cursor::Hide)?;
 
     let mut entries = entries;
-    let result = run_loop(&mut tty_r, &mut tty_w, tty_fd, &mut entries);
+    let result = run_loop(&mut tty_r, &mut tty_w, tty_fd, &mut entries, &mut stats_data, label_map);
 
     execute!(tty_w, cursor::Show, DisableMouseCapture, LeaveAlternateScreen)?;
     terminal::disable_raw_mode()?;
@@ -150,6 +161,8 @@ fn run_loop(
     tty_w: &mut TtyOut,
     tty_fd: i32,
     entries: &mut Vec<HistoryEntry>,
+    stats_data: &mut Option<&mut Stats>,
+    label_map: &HashMap<String, Label>,
 ) -> io::Result<Option<String>> {
     let mut query = String::new();
     let mut cursor_pos: usize = 0;
@@ -182,7 +195,7 @@ fn run_loop(
 
         if need_redraw {
             let mut buf: Vec<u8> = Vec::with_capacity(8192);
-            render_frame(&mut buf, &query, cursor_pos, &results, selected, scroll_offset, cols, rows, entries.len(), &multi_select)?;
+            render_frame(&mut buf, &query, cursor_pos, &results, selected, scroll_offset, cols, rows, entries.len(), &multi_select, label_map)?;
             if show_help {
                 render_help(&mut buf, cols, rows)?;
             }
@@ -221,7 +234,14 @@ fn run_loop(
                 }
             }
             Key::Enter => {
-                return Ok(results.get(selected).map(|r| r.entry.command.clone()));
+                if let Some(r) = results.get(selected) {
+                    let cmd = r.entry.command.clone();
+                    if let Some(sd) = stats_data {
+                        crate::stats::record_selection(sd, &cmd);
+                    }
+                    return Ok(Some(cmd));
+                }
+                return Ok(None);
             }
             Key::Tab => {
                 if let Some(result) = results.get(selected) {
@@ -492,6 +512,7 @@ fn render_frame(
     rows: u16,
     total_count: usize,
     multi_select: &std::collections::HashSet<String>,
+    label_map: &HashMap<String, Label>,
 ) -> io::Result<()> {
     let max_items = (rows as usize).saturating_sub(6);
     let w = cols as usize;
@@ -578,7 +599,27 @@ fn render_frame(
                 queue!(buf, SetForegroundColor(COLOR_TEXT))?;
                 write!(buf, "   ")?;
             }
-            render_entry(buf, result, content_w.saturating_sub(3), result_idx == selected)?;
+            let label = label_map.get(&result.entry.command);
+            let label_width = match label {
+                Some(Label::New) => 5, // " NEW" + space
+                Some(Label::Hot) => 5, // " HOT" + space
+                Some(Label::Top) => 4, // " ★" + space (★ is 1 wide in most terminals)
+                None => 0,
+            };
+            let entry_width = content_w.saturating_sub(3).saturating_sub(label_width);
+            render_entry(buf, result, entry_width, result_idx == selected)?;
+
+            // Render label right-aligned
+            if let Some(label) = label {
+                let color = match label {
+                    Label::New => COLOR_LABEL_NEW,
+                    Label::Hot => COLOR_LABEL_HOT,
+                    Label::Top => COLOR_LABEL_TOP,
+                };
+                queue!(buf, SetForegroundColor(color))?;
+                write!(buf, " {}", label.display())?;
+                queue!(buf, SetAttribute(Attribute::Reset))?;
+            }
             queue!(buf, SetAttribute(Attribute::Reset))?;
         }
 

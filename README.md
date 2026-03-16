@@ -134,6 +134,34 @@ Top 20 base commands:
 ]
 ```
 
+### Labels (opt-in)
+
+Set `BH_STATS=1` to enable usage tracking and command labels.
+
+```bash
+export BH_STATS=1
+```
+
+When enabled, bh tracks command selections and detects trends, displaying labels next to commands in the TUI:
+
+| Label | Color | Condition |
+|---|---|---|
+| `NEW` | Cyan | First seen within 3 days |
+| `HOT` | Orange | Selection trend increasing or history frequency spike |
+| `★` | Yellow | Top 5 most selected commands (last 30 days) |
+
+Priority: `HOT` > `NEW` > `★` (one label per command).
+
+Data is stored in `~/.bh/stats.json`. Without `BH_STATS=1`, no data is read or written.
+
+#### `bh stats` subcommand
+
+```bash
+bh stats          # Show usage summary
+bh stats --json   # JSON output (for piping)
+bh stats --reset  # Delete ~/.bh/stats.json
+```
+
 ## Data source
 
 Reads `~/.bash_history` (read-only). The only write operation is `C-x` (delete entry), which removes the selected command from both memory and the history file.

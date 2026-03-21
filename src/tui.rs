@@ -387,7 +387,7 @@ fn show_prompt_bar(tty_w: &mut TtyOut, tty_fd: i32, prompt: &str) -> io::Result<
 
 // ── Help overlay ────────────────────────────────────────────────────────
 
-const HELP_LINES: &[(&str, &str)] = &[
+const HELP_SHORTCUTS: &[(&str, &str)] = &[
     ("↑  C-p  C-k",    "Selection up"),
     ("↓  C-n  C-j",    "Selection down"),
     ("C-u",            "Half page up"),
@@ -403,68 +403,133 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("?  C-/",         "This help"),
 ];
 
+const HELP_LABELS: &[(&str, &str)] = &[
+    ("✅",  "New — first seen today"),
+    ("🔥",  "Hot — 7d >= 5 & 2x prev"),
+    ("⭐",  "Top — #1 in 30 days"),
+];
+
 const COLOR_HELP_BG: Color = Color::Rgb { r: 35, g: 35, b: 40 };
 
 fn render_help(buf: &mut Vec<u8>, cols: u16, rows: u16) -> io::Result<()> {
-    let pad_l: usize = 4;  // left padding inside box
-    let pad_r: usize = 4;  // right padding inside box
-    let key_col: usize = 16;
-    let gap: usize = 3;    // gap between key and desc columns
-    let desc_col: usize = 19;
-    let inner: usize = pad_l + key_col + gap + desc_col + pad_r;
-    let box_w = (inner + 2) as u16; // + borders
-    let box_h = HELP_LINES.len() as u16 + 6; // +2 top blank, +2 bottom (hint + blank)
+    // ── Layout constants ──
+    let pad: usize = 3;
+
+    // Left panel: Shortcuts
+    let sk_key_w: usize = 16;
+    let sk_gap: usize = 3;
+    let sk_desc_w: usize = 19;
+    let sk_inner: usize = pad + sk_key_w + sk_gap + sk_desc_w + pad;
+
+    // Right panel: Labels
+    let lb_icon_w: usize = 2;  // emoji width
+    let lb_gap: usize = 2;
+    let lb_desc_w: usize = 24;
+    let lb_inner: usize = pad + lb_icon_w + lb_gap + lb_desc_w + pad;
+
+    let divider: usize = 1; // "│" between panels
+    let total_inner = sk_inner + divider + lb_inner;
+    let box_w = (total_inner + 2) as u16; // outer borders
+    let content_rows = HELP_SHORTCUTS.len().max(HELP_LABELS.len() + 2); // labels panel is shorter, vertically centered
+    let box_h = content_rows as u16 + 6; // +2 top padding, +2 bottom (hint + blank), +2 border
     let x = cols.saturating_sub(box_w) / 2;
     let y = rows.saturating_sub(box_h) / 2;
 
-    // Helper: fill a row with background
-    let fill_row = |buf: &mut Vec<u8>, row: u16| -> io::Result<()> {
-        queue!(buf, cursor::MoveTo(x, row), SetBackgroundColor(COLOR_HELP_BG), SetForegroundColor(COLOR_BORDER))?;
-        write!(buf, "│")?;
-        for _ in 0..inner { write!(buf, " ")?; }
-        write!(buf, "│")?;
-        Ok(())
-    };
-
-    // Top border
+    // ── Top border ──
+    let title_l = " Shortcuts ";
+    let title_r = " Labels ";
     queue!(buf, cursor::MoveTo(x, y), SetBackgroundColor(COLOR_HELP_BG), SetForegroundColor(COLOR_BORDER))?;
     write!(buf, "╭")?;
     queue!(buf, SetForegroundColor(COLOR_TITLE))?;
-    write!(buf, " Shortcuts ")?;
+    write!(buf, "{title_l}")?;
     queue!(buf, SetForegroundColor(COLOR_BORDER))?;
-    for _ in 0..inner.saturating_sub(11) { write!(buf, "─")?; }
+    let fill_between = sk_inner.saturating_sub(title_l.len());
+    for _ in 0..fill_between { write!(buf, "─")?; }
+    write!(buf, "┬")?;
+    queue!(buf, SetForegroundColor(COLOR_TITLE))?;
+    write!(buf, "{title_r}")?;
+    queue!(buf, SetForegroundColor(COLOR_BORDER))?;
+    let fill_right = lb_inner.saturating_sub(title_r.len());
+    for _ in 0..fill_right { write!(buf, "─")?; }
     write!(buf, "╮")?;
 
-    // Blank lines (top padding)
-    fill_row(buf, y + 1)?;
-    fill_row(buf, y + 2)?;
+    // ── Top padding ──
+    for r in 1..=2u16 {
+        queue!(buf, cursor::MoveTo(x, y + r), SetBackgroundColor(COLOR_HELP_BG), SetForegroundColor(COLOR_BORDER))?;
+        write!(buf, "│")?;
+        for _ in 0..sk_inner { write!(buf, " ")?; }
+        write!(buf, "│")?;
+        for _ in 0..lb_inner { write!(buf, " ")?; }
+        write!(buf, "│")?;
+    }
 
-    // Help lines
-    for (i, (key, desc)) in HELP_LINES.iter().enumerate() {
+    // ── Content rows ──
+    // Labels are vertically centered in the right panel
+    let lb_offset = (content_rows.saturating_sub(HELP_LABELS.len())) / 2;
+
+    for i in 0..content_rows {
         let row = y + 3 + i as u16;
         queue!(buf, cursor::MoveTo(x, row), SetBackgroundColor(COLOR_HELP_BG), SetForegroundColor(COLOR_BORDER))?;
         write!(buf, "│")?;
-        queue!(buf, SetForegroundColor(COLOR_MATCH))?;
-        write!(buf, "{:>pad_l$}{key:<kw$}", "", pad_l = pad_l, kw = key_col)?;
-        queue!(buf, SetForegroundColor(COLOR_DIM))?;
-        for _ in 0..gap { write!(buf, " ")?; }
-        queue!(buf, SetForegroundColor(COLOR_TEXT))?;
-        write!(buf, "{desc:<dw$}", dw = desc_col)?;
-        for _ in 0..pad_r { write!(buf, " ")?; }
+
+        // Left panel: shortcut
+        if let Some((key, desc)) = HELP_SHORTCUTS.get(i) {
+            queue!(buf, SetForegroundColor(COLOR_MATCH))?;
+            write!(buf, "{:>p$}{key:<kw$}", "", p = pad, kw = sk_key_w)?;
+            queue!(buf, SetForegroundColor(COLOR_DIM))?;
+            for _ in 0..sk_gap { write!(buf, " ")?; }
+            queue!(buf, SetForegroundColor(COLOR_TEXT))?;
+            write!(buf, "{desc:<dw$}", dw = sk_desc_w)?;
+            for _ in 0..pad { write!(buf, " ")?; }
+        } else {
+            for _ in 0..sk_inner { write!(buf, " ")?; }
+        }
+
+        queue!(buf, SetForegroundColor(COLOR_BORDER))?;
+        write!(buf, "│")?;
+
+        // Right panel: label
+        let lb_idx = i.checked_sub(lb_offset);
+        if let Some(idx) = lb_idx {
+            if let Some((icon, desc)) = HELP_LABELS.get(idx) {
+                let color = match idx {
+                    0 => COLOR_LABEL_NEW,
+                    1 => COLOR_LABEL_HOT,
+                    _ => COLOR_LABEL_TOP,
+                };
+                for _ in 0..pad { write!(buf, " ")?; }
+                queue!(buf, SetForegroundColor(color))?;
+                write!(buf, "{icon}")?;
+                for _ in 0..lb_gap { write!(buf, " ")?; }
+                queue!(buf, SetForegroundColor(COLOR_TEXT))?;
+                write!(buf, "{desc:<dw$}", dw = lb_desc_w)?;
+                for _ in 0..pad { write!(buf, " ")?; }
+            } else {
+                for _ in 0..lb_inner { write!(buf, " ")?; }
+            }
+        } else {
+            for _ in 0..lb_inner { write!(buf, " ")?; }
+        }
+
         queue!(buf, SetForegroundColor(COLOR_BORDER))?;
         write!(buf, "│")?;
     }
 
-    // Blank line before hint
-    let blank_row = y + 3 + HELP_LINES.len() as u16;
-    fill_row(buf, blank_row)?;
+    // ── Blank row ──
+    let blank_row = y + 3 + content_rows as u16;
+    queue!(buf, cursor::MoveTo(x, blank_row), SetBackgroundColor(COLOR_HELP_BG), SetForegroundColor(COLOR_BORDER))?;
+    write!(buf, "│")?;
+    for _ in 0..sk_inner { write!(buf, " ")?; }
+    write!(buf, "│")?;
+    for _ in 0..lb_inner { write!(buf, " ")?; }
+    write!(buf, "│")?;
 
-    // Hint line
+    // ── Hint row ──
     let hint_row = blank_row + 1;
     let hint = "Press any key to close";
     let hint_w = hint.len();
-    let pad_hint_l = inner.saturating_sub(hint_w) / 2;
-    let pad_hint_r = inner.saturating_sub(hint_w).saturating_sub(pad_hint_l);
+    let pad_hint_l = total_inner.saturating_sub(hint_w) / 2;
+    let pad_hint_r = total_inner.saturating_sub(hint_w).saturating_sub(pad_hint_l);
     queue!(buf, cursor::MoveTo(x, hint_row), SetBackgroundColor(COLOR_HELP_BG), SetForegroundColor(COLOR_BORDER))?;
     write!(buf, "│")?;
     queue!(buf, SetForegroundColor(COLOR_DIM))?;
@@ -474,11 +539,13 @@ fn render_help(buf: &mut Vec<u8>, cols: u16, rows: u16) -> io::Result<()> {
     queue!(buf, SetForegroundColor(COLOR_BORDER))?;
     write!(buf, "│")?;
 
-    // Bottom border
+    // ── Bottom border ──
     let bot = hint_row + 1;
     queue!(buf, cursor::MoveTo(x, bot), SetBackgroundColor(COLOR_HELP_BG), SetForegroundColor(COLOR_BORDER))?;
     write!(buf, "╰")?;
-    for _ in 0..inner { write!(buf, "─")?; }
+    for _ in 0..sk_inner { write!(buf, "─")?; }
+    write!(buf, "┴")?;
+    for _ in 0..lb_inner { write!(buf, "─")?; }
     write!(buf, "╯")?;
 
     queue!(buf, SetAttribute(Attribute::Reset))?;
@@ -600,25 +667,23 @@ fn render_frame(
                 write!(buf, "   ")?;
             }
             let label = label_map.get(&result.entry.command);
-            let label_width = match label {
-                Some(Label::New) => 5, // " NEW" + space
-                Some(Label::Hot) => 5, // " HOT" + space
-                Some(Label::Top) => 4, // " ★" + space (★ is 1 wide in most terminals)
-                None => 0,
-            };
+            let label_display = label.map(|l| l.display());
+            let label_width = label_display.as_ref().map_or(0, |s| str_width(s) + 1); // +1 for leading space
             let entry_width = content_w.saturating_sub(3).saturating_sub(label_width);
-            render_entry(buf, result, entry_width, result_idx == selected)?;
+            let written = render_entry(buf, result, entry_width, result_idx == selected)?;
 
-            // Render label right-aligned
-            if let Some(label) = label {
-                let color = match label {
+            // Pad remaining space and render label at right edge
+            let pad = entry_width.saturating_sub(written);
+            for _ in 0..pad { write!(buf, " ")?; }
+
+            if let Some(display) = &label_display {
+                let color = match label.unwrap() {
                     Label::New => COLOR_LABEL_NEW,
-                    Label::Hot => COLOR_LABEL_HOT,
-                    Label::Top => COLOR_LABEL_TOP,
+                    Label::Hot { .. } => COLOR_LABEL_HOT,
+                    Label::Top { .. } => COLOR_LABEL_TOP,
                 };
                 queue!(buf, SetForegroundColor(color))?;
-                write!(buf, " {}", label.display())?;
-                queue!(buf, SetAttribute(Attribute::Reset))?;
+                write!(buf, " {display}")?;
             }
             queue!(buf, SetAttribute(Attribute::Reset))?;
         }
@@ -649,7 +714,7 @@ fn render_frame(
     Ok(())
 }
 
-fn render_entry(buf: &mut Vec<u8>, result: &SearchResult, available: usize, is_selected: bool) -> io::Result<()> {
+fn render_entry(buf: &mut Vec<u8>, result: &SearchResult, available: usize, is_selected: bool) -> io::Result<usize> {
     let cmd = &result.entry.command;
     let cmd_max = available;
     let mut written: usize = 0;
@@ -666,6 +731,7 @@ fn render_entry(buf: &mut Vec<u8>, result: &SearchResult, available: usize, is_s
                 }
             }
             write!(buf, "…")?;
+            written += 1;
             break;
         }
 
@@ -686,5 +752,5 @@ fn render_entry(buf: &mut Vec<u8>, result: &SearchResult, available: usize, is_s
         queue!(buf, SetForegroundColor(COLOR_TEXT))?;
     }
 
-    Ok(())
+    Ok(written)
 }

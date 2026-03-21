@@ -2,19 +2,19 @@ use std::collections::HashMap;
 
 use crate::stats::{self, Stats};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Label {
     New,
-    Hot,
-    Top,
+    Hot { count: u32 },
+    Top { count: u32 },
 }
 
 impl Label {
-    pub fn display(&self) -> &'static str {
+    pub fn display(&self) -> String {
         match self {
-            Label::New => "NEW",
-            Label::Hot => "HOT",
-            Label::Top => "★",
+            Label::New => "✅".to_string(),
+            Label::Hot { count } => format!("🔥{count}"),
+            Label::Top { count } => format!("⭐{count}"),
         }
     }
 }
@@ -23,7 +23,7 @@ pub fn compute_labels(stats_data: &Stats) -> HashMap<String, Label> {
     let mut labels: HashMap<String, Label> = HashMap::new();
     let today = stats::today_str();
 
-    // 1. TOP: top 5 by selection count in last 30 days
+    // 1. TOP: #1 by selection count in last 30 days
     let from_30d = stats::days_ago_from(&today, 30).unwrap_or_default();
     let all_cmds = stats::all_selected_commands(&stats_data.daily_selections);
     let mut cmd_counts: Vec<(String, u32)> = all_cmds
@@ -37,14 +37,14 @@ pub fn compute_labels(stats_data: &Stats) -> HashMap<String, Label> {
         .collect();
     cmd_counts.sort_by(|a, b| b.1.cmp(&a.1));
 
-    for (cmd, _) in cmd_counts.iter().take(5) {
-        labels.insert(cmd.clone(), Label::Top);
+    if let Some((cmd, count)) = cmd_counts.first() {
+        labels.insert(cmd.clone(), Label::Top { count: *count });
     }
 
-    // 2. NEW: first_seen within 3 days
+    // 2. NEW: first_seen within 1 day
     for (cmd, date) in &stats_data.first_seen {
         if let Some(days) = stats::days_since(date) {
-            if days <= 3 {
+            if days <= 1 {
                 labels.insert(cmd.clone(), Label::New);
             }
         }
@@ -53,22 +53,20 @@ pub fn compute_labels(stats_data: &Stats) -> HashMap<String, Label> {
     // 3. HOT (highest priority — overwrites NEW and TOP)
     let from_7d = stats::days_ago_from(&today, 7).unwrap_or_default();
     let from_14d = stats::days_ago_from(&today, 14).unwrap_or_default();
-    // prev 7 days = [from_14d, from_7d)
-    // To get the day before from_7d:
     let prev_7d_end = stats::days_ago_from(&today, 8).unwrap_or_default();
 
-    // HOT condition 1: selection trend
+    // HOT condition 1: selection trend (>= 5 in recent 7d, >= 2x previous 7d)
     for cmd in &all_cmds {
         let recent =
             stats::selections_in_range(&stats_data.daily_selections, cmd, &from_7d, &today);
         let prev =
             stats::selections_in_range(&stats_data.daily_selections, cmd, &from_14d, &prev_7d_end);
-        if recent >= 2 && recent > prev {
-            labels.insert(cmd.clone(), Label::Hot);
+        if recent >= 5 && recent >= prev * 2 {
+            labels.insert(cmd.clone(), Label::Hot { count: recent });
         }
     }
 
-    // HOT condition 2: bash_history frequency spike
+    // HOT condition 2: bash_history frequency spike (top 5%, increase >= 3)
     if let (Some(curr), Some(prev)) =
         (&stats_data.history_snapshot, &stats_data.prev_snapshot)
     {
@@ -82,7 +80,6 @@ pub fn compute_labels(stats_data: &Stats) -> HashMap<String, Label> {
 
         if !increases.is_empty() {
             increases.sort_by(|a, b| b.1.cmp(&a.1));
-            // Top 5% threshold
             let top_idx = (increases.len() as f64 * 0.05).ceil() as usize;
             let threshold_increase = increases
                 .get(top_idx.saturating_sub(1))
@@ -91,7 +88,7 @@ pub fn compute_labels(stats_data: &Stats) -> HashMap<String, Label> {
 
             for (cmd, inc) in &increases {
                 if *inc >= 3 && *inc >= threshold_increase {
-                    labels.insert(cmd.clone(), Label::Hot);
+                    labels.insert(cmd.clone(), Label::Hot { count: *inc as u32 });
                 }
             }
         }
@@ -155,9 +152,9 @@ mod tests {
         stats.daily_selections.insert(prev_date, day);
 
         let labels = compute_labels(&stats);
-        assert_eq!(labels.get("cmd1"), Some(&Label::Top));
-        assert_eq!(labels.get("cmd5"), Some(&Label::Top));
-        assert_eq!(labels.get("cmd6"), None);
+        assert_eq!(labels.get("cmd1"), Some(&Label::Top { count: 10 }));
+        assert_eq!(labels.get("cmd2"), None); // only #1 gets Top
+        assert_eq!(labels.get("cmd4"), None);
     }
 
     #[test]
@@ -165,19 +162,19 @@ mod tests {
         let mut stats = make_stats();
         let today = stats::today_str();
 
-        // Recent 7 days: 5 selections
+        // Recent 7 days: 6 selections (>= 5, >= 2x prev)
         let mut recent_day = HashMap::new();
-        recent_day.insert("trending_cmd".to_string(), 5);
+        recent_day.insert("trending_cmd".to_string(), 6);
         stats.daily_selections.insert(today.clone(), recent_day);
 
-        // Previous 7 days: 1 selection
+        // Previous 7 days: 2 selections
         let prev_date = stats::days_ago_from(&today, 10).unwrap();
         let mut prev_day = HashMap::new();
-        prev_day.insert("trending_cmd".to_string(), 1);
+        prev_day.insert("trending_cmd".to_string(), 2);
         stats.daily_selections.insert(prev_date, prev_day);
 
         let labels = compute_labels(&stats);
-        assert_eq!(labels.get("trending_cmd"), Some(&Label::Hot));
+        assert_eq!(labels.get("trending_cmd"), Some(&Label::Hot { count: 6 }));
     }
 
     #[test]
@@ -190,14 +187,14 @@ mod tests {
             .first_seen
             .insert("hot_new_cmd".to_string(), today.clone());
 
-        // Also make it hot via selection trend
+        // Also make it hot via selection trend (>= 5, no prev = 2x satisfied)
         let mut recent_day = HashMap::new();
         recent_day.insert("hot_new_cmd".to_string(), 5);
         stats.daily_selections.insert(today.clone(), recent_day);
 
         let labels = compute_labels(&stats);
         // HOT should take priority over NEW
-        assert_eq!(labels.get("hot_new_cmd"), Some(&Label::Hot));
+        assert_eq!(labels.get("hot_new_cmd"), Some(&Label::Hot { count: 5 }));
     }
 
     #[test]
@@ -230,7 +227,7 @@ mod tests {
         });
 
         let labels = compute_labels(&stats);
-        assert_eq!(labels.get("spiked_cmd"), Some(&Label::Hot));
+        assert!(matches!(labels.get("spiked_cmd"), Some(&Label::Hot { .. })));
     }
 
     #[test]
@@ -243,8 +240,8 @@ mod tests {
         recent_day.insert("popular_cmd".to_string(), 20);
         stats.daily_selections.insert(today.clone(), recent_day);
 
-        // No previous selections = trend means HOT
+        // No previous selections = trend means HOT (20 >= 5, 20 >= 0*2)
         let labels = compute_labels(&stats);
-        assert_eq!(labels.get("popular_cmd"), Some(&Label::Hot));
+        assert_eq!(labels.get("popular_cmd"), Some(&Label::Hot { count: 20 }));
     }
 }

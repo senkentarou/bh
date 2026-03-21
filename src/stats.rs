@@ -70,11 +70,19 @@ pub fn record_selection(stats: &mut Stats, command: &str) {
 
 pub fn update_first_seen(stats: &mut Stats, commands: &[String]) {
     let today = today_str();
+    // On first run (empty first_seen), treat all existing commands as old
+    // so they don't all get labeled NEW.
+    let is_first_run = stats.first_seen.is_empty();
+    let date_for_existing = if is_first_run {
+        days_ago_str(30)
+    } else {
+        today.clone()
+    };
     for cmd in commands {
         stats
             .first_seen
             .entry(cmd.clone())
-            .or_insert_with(|| today.clone());
+            .or_insert_with(|| date_for_existing.clone());
     }
 }
 

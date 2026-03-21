@@ -136,10 +136,18 @@ Top 20 base commands:
 
 ### Labels (opt-in)
 
-Set `BH_STATS=1` to enable usage tracking and command labels.
+Create `~/.config/bh/config.toml` to enable usage tracking and command labels:
 
 ```bash
-export BH_STATS=1
+mkdir -p ~/.config/bh
+touch ~/.config/bh/config.toml
+```
+
+This is all that's needed — an empty file enables the feature. To explicitly disable:
+
+```toml
+[stats]
+enabled = false
 ```
 
 When enabled, bh tracks command selections and detects trends, displaying labels next to commands in the TUI:
@@ -152,7 +160,7 @@ When enabled, bh tracks command selections and detects trends, displaying labels
 
 Priority: `HOT` > `NEW` > `★` (one label per command).
 
-Data is stored in `~/.bh/stats.json`. Without `BH_STATS=1`, no data is read or written.
+Data is stored in `~/.bh/stats.json`. Without the config file, no data is read or written.
 
 #### `bh stats` subcommand
 

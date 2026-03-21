@@ -306,22 +306,41 @@ fn run_loop(
                 if selected + 1 < results.len() { selected += 1; }
             }
             Key::CtrlG => {
-                // Select all stale-labeled commands (including hidden freq==1)
-                let mut count = 0;
-                for entry in entries.iter() {
-                    if let Some(label) = label_map.get(&entry.command)
-                        && label.is_stale()
-                    {
-                        multi_select.insert(entry.command.clone());
-                        count += 1;
-                    }
-                }
-                if count == 0 {
+                // Collect all stale-labeled commands (including hidden freq==1)
+                let targets: Vec<String> = entries
+                    .iter()
+                    .filter(|e| label_map.get(&e.command).is_some_and(|l| l.is_stale()))
+                    .map(|e| e.command.clone())
+                    .collect();
+
+                if targets.is_empty() {
                     let prompt = " No stale (💤) entries found ";
                     show_prompt_bar(tty_w, tty_fd, prompt)?;
                     set_read_blocking(tty_fd);
                     let _ = input::read_key(tty_r)?;
                     set_read_timeout(tty_fd, 1);
+                } else {
+                    let count = targets.len();
+                    let prompt = format!(" Delete {} stale (💤) entries? (y/N): ", count);
+                    show_prompt_bar(tty_w, tty_fd, &prompt)?;
+
+                    set_read_blocking(tty_fd);
+                    let confirmed = loop {
+                        match input::read_key(tty_r)? {
+                            Key::Char('y') => break true,
+                            Key::Char('n') | Key::Char('N') | Key::Escape | Key::CtrlC => break false,
+                            _ => continue,
+                        }
+                    };
+                    set_read_timeout(tty_fd, 1);
+
+                    if confirmed {
+                        for cmd in &targets {
+                            history::delete_command(entries, cmd);
+                        }
+                        selected = 0;
+                        scroll_offset = 0;
+                    }
                 }
             }
             Key::CtrlX => {

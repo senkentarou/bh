@@ -778,7 +778,7 @@ fn render_entry(buf: &mut Vec<u8>, result: &SearchResult, available: usize, is_s
             break;
         }
 
-        let is_match = result.match_range.as_ref().is_some_and(|r| r.contains(&bi));
+        let is_match = result.match_positions.contains(&bi);
         if is_match && !in_hl {
             queue!(buf, SetForegroundColor(COLOR_MATCH))?;
             in_hl = true;

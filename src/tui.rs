@@ -40,6 +40,7 @@ const COLOR_WARN_FG: Color = Color::Rgb { r: 255, g: 220, b: 220 };
 const COLOR_LABEL_NEW: Color = Color::Rgb { r: 80, g: 200, b: 200 };
 const COLOR_LABEL_HOT: Color = Color::Rgb { r: 255, g: 120, b: 80 };
 const COLOR_LABEL_TOP: Color = Color::Rgb { r: 255, g: 200, b: 60 };
+const COLOR_LABEL_STALE: Color = Color::Rgb { r: 120, g: 120, b: 120 };
 
 // ── TTY helpers ─────────────────────────────────────────────────────────
 
@@ -175,7 +176,7 @@ fn run_loop(
 
     loop {
         let (cols, rows) = tty_size(tty_fd);
-        let max_items = (rows as usize).saturating_sub(6);
+        let max_items = (rows as usize).saturating_sub(4);
         let results = history::search_adaptive(entries, &query);
 
         if selected >= results.len() && !results.is_empty() {
@@ -304,6 +305,25 @@ fn run_loop(
             Key::Down | Key::CtrlN | Key::CtrlJ => {
                 if selected + 1 < results.len() { selected += 1; }
             }
+            Key::CtrlG => {
+                // Select all stale-labeled commands (including hidden freq==1)
+                let mut count = 0;
+                for entry in entries.iter() {
+                    if let Some(label) = label_map.get(&entry.command)
+                        && label.is_stale()
+                    {
+                        multi_select.insert(entry.command.clone());
+                        count += 1;
+                    }
+                }
+                if count == 0 {
+                    let prompt = " No stale (💤) entries found ";
+                    show_prompt_bar(tty_w, tty_fd, prompt)?;
+                    set_read_blocking(tty_fd);
+                    let _ = input::read_key(tty_r)?;
+                    set_read_timeout(tty_fd, 1);
+                }
+            }
             Key::CtrlX => {
                 let results = history::search_adaptive(entries, &query);
                 if !multi_select.is_empty() {
@@ -395,6 +415,7 @@ const HELP_SHORTCUTS: &[(&str, &str)] = &[
     ("Enter",          "Select command"),
     ("Tab",            "Multi-select toggle"),
     ("Shift-Tab",      "Deselect + move up"),
+    ("C-g",            "Select all stale"),
     ("C-x",            "Delete selected"),
     ("Esc  C-c  C-q",  "Quit / clear select"),
     ("← / →",          "Cursor move"),
@@ -407,6 +428,7 @@ const HELP_LABELS: &[(&str, &str)] = &[
     ("✅",  "New — first seen today"),
     ("🔥",  "Hot — 7d >= 5 & 2x prev"),
     ("⭐",  "Top — #1 in 30 days"),
+    ("💤",  "Stale — old & unused"),
 ];
 
 const COLOR_HELP_BG: Color = Color::Rgb { r: 35, g: 35, b: 40 };
@@ -495,7 +517,8 @@ fn render_help(buf: &mut Vec<u8>, cols: u16, rows: u16) -> io::Result<()> {
                 let color = match idx {
                     0 => COLOR_LABEL_NEW,
                     1 => COLOR_LABEL_HOT,
-                    _ => COLOR_LABEL_TOP,
+                    2 => COLOR_LABEL_TOP,
+                    _ => COLOR_LABEL_STALE,
                 };
                 for _ in 0..pad { write!(buf, " ")?; }
                 queue!(buf, SetForegroundColor(color))?;
@@ -581,7 +604,7 @@ fn render_frame(
     multi_select: &std::collections::HashSet<String>,
     label_map: &HashMap<String, Label>,
 ) -> io::Result<()> {
-    let max_items = (rows as usize).saturating_sub(6);
+    let max_items = (rows as usize).saturating_sub(4);
     let w = cols as usize;
     let rc = cols.saturating_sub(1); // right-border column
 
@@ -678,6 +701,7 @@ fn render_frame(
 
             if let Some(display) = &label_display {
                 let color = match label.unwrap() {
+                    Label::Stale => COLOR_LABEL_STALE,
                     Label::New => COLOR_LABEL_NEW,
                     Label::Hot { .. } => COLOR_LABEL_HOT,
                     Label::Top { .. } => COLOR_LABEL_TOP,

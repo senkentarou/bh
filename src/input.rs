@@ -25,6 +25,7 @@ pub enum Key {
     CtrlQ,
     CtrlU,
     CtrlX,
+    CtrlG,
     CtrlSlash,
     Unknown,
 }
@@ -47,6 +48,7 @@ pub fn read_key(tty: &mut File) -> io::Result<Key> {
         0x10 => Ok(Key::CtrlP),
         0x11 => Ok(Key::CtrlQ),
         0x15 => Ok(Key::CtrlU),
+        0x07 => Ok(Key::CtrlG),
         0x18 => Ok(Key::CtrlX),
         0x1f => Ok(Key::CtrlSlash),
         0x7f | 0x08 => Ok(Key::Backspace),

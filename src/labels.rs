@@ -4,6 +4,7 @@ use crate::stats::{self, Stats};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Label {
+    Stale,
     New,
     Hot { count: u32 },
     Top { count: u32 },
@@ -12,19 +13,57 @@ pub enum Label {
 impl Label {
     pub fn display(&self) -> String {
         match self {
+            Label::Stale => "💤".to_string(),
             Label::New => "✅".to_string(),
             Label::Hot { count } => format!("🔥{count}"),
             Label::Top { count } => format!("⭐{count}"),
         }
     }
+
+    pub fn is_stale(&self) -> bool {
+        matches!(self, Label::Stale)
+    }
 }
 
 pub fn compute_labels(stats_data: &Stats) -> HashMap<String, Label> {
+    compute_labels_with(stats_data, &[])
+}
+
+pub fn compute_labels_with(
+    stats_data: &Stats,
+    entries: &[crate::history::HistoryEntry],
+) -> HashMap<String, Label> {
     let mut labels: HashMap<String, Label> = HashMap::new();
     let today = stats::today_str();
 
-    // 1. TOP: #1 by selection count in last 30 days
+    // 0. STALE: frequency <= 2, first_seen > 14 days ago, not selected in last 30 days
     let from_30d = stats::days_ago_from(&today, 30).unwrap_or_default();
+    for entry in entries {
+        if entry.frequency > 2 {
+            continue;
+        }
+        // Must have been seen > 14 days ago
+        let first_seen_old = stats_data
+            .first_seen
+            .get(&entry.command)
+            .and_then(|d| stats::days_since(d))
+            .is_some_and(|days| days > 14);
+        if !first_seen_old {
+            continue;
+        }
+        // Must not have been selected in last 30 days
+        let recent_selections = stats::selections_in_range(
+            &stats_data.daily_selections,
+            &entry.command,
+            &from_30d,
+            &today,
+        );
+        if recent_selections == 0 {
+            labels.insert(entry.command.clone(), Label::Stale);
+        }
+    }
+
+    // 1. TOP: #1 by selection count in last 30 days (overwrites Stale)
     let all_cmds = stats::all_selected_commands(&stats_data.daily_selections);
     let mut cmd_counts: Vec<(String, u32)> = all_cmds
         .iter()
@@ -228,6 +267,85 @@ mod tests {
 
         let labels = compute_labels(&stats);
         assert!(matches!(labels.get("spiked_cmd"), Some(&Label::Hot { .. })));
+    }
+
+    use crate::history::HistoryEntry;
+
+    fn make_entry(command: &str, frequency: usize) -> HistoryEntry {
+        HistoryEntry {
+            command: command.to_string(),
+            frequency,
+            recency_rank: 0,
+            score: 0.0,
+        }
+    }
+
+    #[test]
+    fn test_stale_label() {
+        let mut stats = make_stats();
+        // first_seen 20 days ago
+        let old_date = stats::days_ago_from(&stats::today_str(), 20).unwrap();
+        stats.first_seen.insert("old_cmd".to_string(), old_date);
+
+        let entries = vec![make_entry("old_cmd", 1)];
+        let labels = compute_labels_with(&stats, &entries);
+        assert_eq!(labels.get("old_cmd"), Some(&Label::Stale));
+    }
+
+    #[test]
+    fn test_stale_not_if_recently_selected() {
+        let mut stats = make_stats();
+        let old_date = stats::days_ago_from(&stats::today_str(), 20).unwrap();
+        stats.first_seen.insert("old_cmd".to_string(), old_date);
+
+        // Selected today
+        let today = stats::today_str();
+        let mut day = HashMap::new();
+        day.insert("old_cmd".to_string(), 1);
+        stats.daily_selections.insert(today, day);
+
+        let entries = vec![make_entry("old_cmd", 1)];
+        let labels = compute_labels_with(&stats, &entries);
+        assert_ne!(labels.get("old_cmd"), Some(&Label::Stale));
+    }
+
+    #[test]
+    fn test_stale_not_if_high_frequency() {
+        let mut stats = make_stats();
+        let old_date = stats::days_ago_from(&stats::today_str(), 20).unwrap();
+        stats.first_seen.insert("frequent_cmd".to_string(), old_date);
+
+        let entries = vec![make_entry("frequent_cmd", 5)];
+        let labels = compute_labels_with(&stats, &entries);
+        assert_ne!(labels.get("frequent_cmd"), Some(&Label::Stale));
+    }
+
+    #[test]
+    fn test_stale_not_if_new() {
+        let mut stats = make_stats();
+        let recent_date = stats::days_ago_from(&stats::today_str(), 3).unwrap();
+        stats.first_seen.insert("recent_cmd".to_string(), recent_date);
+
+        let entries = vec![make_entry("recent_cmd", 1)];
+        let labels = compute_labels_with(&stats, &entries);
+        assert_ne!(labels.get("recent_cmd"), Some(&Label::Stale));
+    }
+
+    #[test]
+    fn test_hot_overrides_stale() {
+        let mut stats = make_stats();
+        let old_date = stats::days_ago_from(&stats::today_str(), 20).unwrap();
+        stats.first_seen.insert("cmd".to_string(), old_date);
+
+        // Make it HOT via selection trend
+        let today = stats::today_str();
+        let mut day = HashMap::new();
+        day.insert("cmd".to_string(), 6);
+        stats.daily_selections.insert(today, day);
+
+        let entries = vec![make_entry("cmd", 1)];
+        let labels = compute_labels_with(&stats, &entries);
+        assert_eq!(labels.get("cmd"), Some(&Label::Hot { count: 6 }));
     }
 
     #[test]

@@ -95,7 +95,7 @@ fn main() {
             stats::update_first_seen(&mut stats_data, &commands);
             stats::update_snapshot(&mut stats_data, &entries);
             stats::prune_old_data(&mut stats_data);
-            let label_map = labels::compute_labels(&stats_data);
+            let label_map = labels::compute_labels_with(&stats_data, &entries);
 
             let result = tui::run(entries, Some(&mut stats_data), &label_map);
             stats::save_stats(&stats_data);

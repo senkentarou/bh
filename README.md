@@ -1,6 +1,6 @@
 # bh — Bash History Search
 
-Fast, interactive bash history search with frequency-weighted smart ranking.
+Fast, interactive bash history search with fuzzy matching and smart ranking.
 A lightweight Rust TUI alternative to `Ctrl-R`.
 
 ## Install
@@ -14,7 +14,7 @@ Download the latest binary from [GitHub Releases](../../releases/latest) and pla
 curl -sL https://github.com/senkentarou/bh/releases/latest/download/bh-v0.1.0-aarch64-apple-darwin.tar.gz | tar xz
 sudo mv bh-v0.1.0-aarch64-apple-darwin/bh /usr/local/bin/
 
-# macOS Gatekeeper の警告が出る場合
+# Bypass macOS Gatekeeper warning if needed
 xattr -cr /usr/local/bin/bh
 ```
 
@@ -24,21 +24,10 @@ xattr -cr /usr/local/bin/bh
 cargo install --path .
 ```
 
-## Release
-
-```bash
-# 1. Update version in Cargo.toml
-# 2. Commit the change
-# 3. Run:
-./release.sh
-```
-
-This tags the current commit with the version from `Cargo.toml` and pushes to GitHub, triggering the CI to build and publish binaries.
-
 ## Usage
 
 ```bash
-# Interactive TUI mode
+# Interactive TUI (executes selected command directly when stdout is a TTY)
 bh
 
 # Table output with summary stats
@@ -49,11 +38,16 @@ bh --json
 
 # Limit to top N entries
 bh --json -n 50
+
+# Usage statistics
+bh stats
+bh stats --json
+bh stats --reset
 ```
 
-### Shell integration
+### Shell integration (Ctrl-R)
 
-Add to your `.bashrc` to bind `bh` to `Ctrl-R`:
+When stdout is piped, bh prints the selected command to stdout. Add this to your `.bashrc` to use it as `Ctrl-R`:
 
 ```bash
 bh-search() {
@@ -67,18 +61,31 @@ bh-search() {
 bind -x '"\C-r": bh-search'
 ```
 
+### Direct execution
+
+When stdout is a TTY (i.e. running `bh` directly in the terminal), the selected command is executed via `execvp` using `$SHELL` (defaults to `/bin/bash`).
+
 ## Features
 
-### Interactive search (TUI)
+### Fuzzy matching
 
-Run `bh` with no arguments to launch the interactive mode.
+fzf-style fuzzy matching — query characters are matched in order but don't need to be contiguous. Exact substring matches always rank above fuzzy results.
 
-- Incremental case-insensitive substring search
-- Match highlighting
-- Frequency count displayed per command
-- `Enter` outputs the selected command to stdout
+```
+gtp  → git push     (g·t · p matched in order)
+gpl  → git pull     (g · p·l matched in order)
+```
 
-Press `C-?` / `C-/` to show the full keybinding list.
+Match quality scoring:
+
+| Factor | Bonus | Description |
+|---|---|---|
+| Consecutive | +8 | Matched characters are adjacent |
+| Word boundary | +5 | Match after ` ` `/` `-` `_` `.` |
+| String start | +6 | Match at position 0 |
+| Tightness | +4 | Shorter span between first and last match |
+| Early position | +3 | Match near the start of the command |
+| Exact substring | +100 | Full substring match |
 
 ### Smart ranking
 
@@ -86,19 +93,67 @@ Score = `(recency × 0.6 + log(1 + frequency) × 0.4) × noise_penalty`
 
 | Factor | Weight | Description |
 |---|---|---|
-| Recency | 0.6 | Position in history file — recently used commands rank higher |
+| Recency | 0.6 | Recently used commands rank higher |
 | Frequency | 0.4 | Log-scaled occurrence count to prevent extreme skew |
 | Noise penalty | ×0.3 | Applied to single-use commands to demote typos and one-offs |
 
 ### Adaptive noise filter
-
-The filter threshold adjusts dynamically based on result count:
 
 | Condition | Behavior |
 |---|---|
 | No query | Show only commands used 2+ times |
 | ≤ 20 results | Show all (including low-frequency) |
 | > 20 results | Cut entries below 50% of the top-third score |
+
+### Labels
+
+Create `~/.config/bh/config.toml` to enable usage tracking and labels:
+
+```bash
+mkdir -p ~/.config/bh
+touch ~/.config/bh/config.toml
+```
+
+An empty file enables the feature. To explicitly disable:
+
+```toml
+[stats]
+enabled = false
+```
+
+| Label | Condition |
+|---|---|
+| ✅ NEW | First seen within 1 day |
+| 🔥 HOT | Selections in last 7 days >= 5 and >= 2x previous week, or history frequency in top 5% with delta >= 3 |
+| ⭐ TOP | #1 most selected command in the last 30 days |
+| 💤 STALE | Frequency <= 2, first seen > 14 days ago, not selected in 30 days |
+
+Priority: HOT > TOP > NEW (STALE is overridden by any other label). Data is stored in `~/.bh/stats.json`.
+
+### Stale cleanup (C-g)
+
+`C-g` prompts to bulk-delete all 💤 STALE commands. Confirms with `y/N` before deleting.
+
+### Keybindings
+
+Press `C-?` / `C-/` to show the help overlay.
+
+| Key | Action |
+|---|---|
+| `↑` `C-p` `C-k` | Move selection up |
+| `↓` `C-n` `C-j` | Move selection down |
+| `C-u` | Half page up |
+| `C-d` | Half page down |
+| `Enter` | Select command |
+| `Tab` | Toggle multi-select |
+| `Shift-Tab` | Deselect + move up |
+| `C-g` | Bulk delete stale (💤) |
+| `C-x` | Delete selected |
+| `Esc` `C-c` `C-q` | Quit / clear selection |
+| `←` `→` | Move cursor |
+| `C-a` `C-e` | Cursor to start/end |
+| `C-l` | Delete to end of line |
+| `C-?` `C-/` | Help |
 
 ### Export
 
@@ -134,45 +189,18 @@ Top 20 base commands:
 ]
 ```
 
-### Labels (opt-in)
-
-Create `~/.config/bh/config.toml` to enable usage tracking and command labels:
+## Release
 
 ```bash
-mkdir -p ~/.config/bh
-touch ~/.config/bh/config.toml
-```
-
-This is all that's needed — an empty file enables the feature. To explicitly disable:
-
-```toml
-[stats]
-enabled = false
-```
-
-When enabled, bh tracks command selections and detects trends, displaying labels next to commands in the TUI:
-
-| Label | Color | Condition |
-|---|---|---|
-| `NEW` | Cyan | First seen within 3 days |
-| `HOT` | Orange | Selection trend increasing or history frequency spike |
-| `★` | Yellow | Top 5 most selected commands (last 30 days) |
-
-Priority: `HOT` > `NEW` > `★` (one label per command).
-
-Data is stored in `~/.bh/stats.json`. Without the config file, no data is read or written.
-
-#### `bh stats` subcommand
-
-```bash
-bh stats          # Show usage summary
-bh stats --json   # JSON output (for piping)
-bh stats --reset  # Delete ~/.bh/stats.json
+# 1. Update version in Cargo.toml
+# 2. Commit the change
+# 3. Run:
+./release.sh
 ```
 
 ## Data source
 
-Reads `~/.bash_history` (read-only). The only write operation is `C-x` (delete entry), which removes the selected command from both memory and the history file.
+Reads `~/.bash_history`. Write operations are `C-x` (delete selected) and `C-g` (bulk delete stale).
 
 ## Tech stack
 

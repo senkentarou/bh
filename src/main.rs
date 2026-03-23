@@ -13,10 +13,14 @@ use std::os::unix::io::AsRawFd;
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
-#[command(name = "bh", about = "Interactive bash history search with smart ranking")]
+#[command(name = "bh", version = env!("CARGO_PKG_VERSION"), disable_version_flag = true, about = "Interactive bash history search with smart ranking")]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
+
+    /// Print version
+    #[arg(short = 'v', long = "version", action = clap::ArgAction::Version)]
+    version: (),
 
     /// Output as JSON
     #[arg(long, conflicts_with = "table")]

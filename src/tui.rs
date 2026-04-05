@@ -176,7 +176,7 @@ fn run_loop(
 
     loop {
         let (cols, rows) = tty_size(tty_fd);
-        let max_items = (rows as usize).saturating_sub(4);
+        let max_items = (rows as usize).saturating_sub(5);
         let results = history::search_adaptive(entries, &query);
 
         if selected >= results.len() && !results.is_empty() {
@@ -411,7 +411,7 @@ fn run_loop(
 fn show_prompt_bar(tty_w: &mut TtyOut, tty_fd: i32, prompt: &str) -> io::Result<()> {
     let (cols, rows) = tty_size(tty_fd);
     let mut cbuf: Vec<u8> = Vec::with_capacity(1024);
-    let prompt_row = rows.saturating_sub(2);
+    let prompt_row = rows.saturating_sub(1);
     queue!(cbuf, cursor::MoveTo(0, prompt_row))?;
     queue!(cbuf, SetBackgroundColor(COLOR_WARN_BG), SetForegroundColor(COLOR_WARN_FG))?;
     let display = truncate_str(prompt, cols as usize);
@@ -623,7 +623,7 @@ fn render_frame(
     multi_select: &std::collections::HashSet<String>,
     label_map: &HashMap<String, Label>,
 ) -> io::Result<()> {
-    let max_items = (rows as usize).saturating_sub(4);
+    let max_items = (rows as usize).saturating_sub(5);
     let w = cols as usize;
     let rc = cols.saturating_sub(1); // right-border column
 
@@ -734,21 +734,26 @@ fn render_frame(
         right_border(buf, rc, row, "│")?;
     }
 
-    // Bottom border with help hint
-    let bottom = rows.saturating_sub(1).min(3 + max_items as u16);
+    // Bottom border
+    let bottom = rows.saturating_sub(2).min(3 + max_items as u16);
     queue!(buf, cursor::MoveTo(0, bottom), terminal::Clear(ClearType::CurrentLine), SetForegroundColor(COLOR_BORDER))?;
     write!(buf, "╰")?;
-    let hint = " ?: help ";
-    let hint_w = str_width(hint);
-    let fill_w = w.saturating_sub(2 + hint_w);
-    write_hline(buf, fill_w)?;
-    queue!(buf, SetForegroundColor(COLOR_DIM))?;
-    write!(buf, "{hint}")?;
-    queue!(buf, SetForegroundColor(COLOR_BORDER))?;
+    write_hline(buf, w.saturating_sub(2))?;
     right_border(buf, rc, bottom, "╯")?;
 
-    // Clear any stale rows below the bottom border
-    for r in (bottom + 1)..rows {
+    // Key hints below the border
+    let hint_row = bottom + 1;
+    if hint_row < rows {
+        queue!(buf, cursor::MoveTo(0, hint_row), terminal::Clear(ClearType::CurrentLine))?;
+        let hint = "?: help";
+        let hint_w = str_width(hint);
+        let x = (cols as usize).saturating_sub(hint_w + 1);
+        queue!(buf, cursor::MoveTo(x as u16, hint_row), SetForegroundColor(COLOR_DIM))?;
+        write!(buf, "{hint}")?;
+    }
+
+    // Clear any stale rows below the hints
+    for r in (hint_row + 1)..rows {
         queue!(buf, cursor::MoveTo(0, r), terminal::Clear(ClearType::CurrentLine))?;
     }
 

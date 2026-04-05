@@ -100,13 +100,15 @@ fn main() {
             stats::update_snapshot(&mut stats_data, &entries);
             stats::prune_old_data(&mut stats_data);
             let label_map = labels::compute_labels_with(&stats_data, &entries);
+            let selection_counts = stats::total_selections(&stats_data.daily_selections);
 
-            let result = tui::run(entries, Some(&mut stats_data), &label_map);
+            let result = tui::run(entries, Some(&mut stats_data), &label_map, &selection_counts);
             stats::save_stats(&stats_data);
             result
         } else {
             let empty_labels = HashMap::new();
-            tui::run(entries, None, &empty_labels)
+            let empty_counts = HashMap::new();
+            tui::run(entries, None, &empty_labels, &empty_counts)
         };
 
         match selected {

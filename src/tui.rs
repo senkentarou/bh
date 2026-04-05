@@ -127,6 +127,7 @@ pub fn run(
     entries: Vec<HistoryEntry>,
     mut stats_data: Option<&mut Stats>,
     label_map: &HashMap<String, Label>,
+    selection_counts: &HashMap<String, u32>,
 ) -> io::Result<Option<String>> {
     let mut tty_r = File::options().read(true).open("/dev/tty")?;
     let tty_fd = tty_r.as_raw_fd();
@@ -146,7 +147,7 @@ pub fn run(
     execute!(tty_w, EnterAlternateScreen, EnableMouseCapture, cursor::Hide)?;
 
     let mut entries = entries;
-    let result = run_loop(&mut tty_r, &mut tty_w, tty_fd, &mut entries, &mut stats_data, label_map);
+    let result = run_loop(&mut tty_r, &mut tty_w, tty_fd, &mut entries, &mut stats_data, label_map, selection_counts);
 
     execute!(tty_w, cursor::Show, DisableMouseCapture, LeaveAlternateScreen)?;
     terminal::disable_raw_mode()?;
@@ -164,6 +165,7 @@ fn run_loop(
     entries: &mut Vec<HistoryEntry>,
     stats_data: &mut Option<&mut Stats>,
     label_map: &HashMap<String, Label>,
+    selection_counts: &HashMap<String, u32>,
 ) -> io::Result<Option<String>> {
     let mut query = String::new();
     let mut cursor_pos: usize = 0;
@@ -196,7 +198,7 @@ fn run_loop(
 
         if need_redraw {
             let mut buf: Vec<u8> = Vec::with_capacity(8192);
-            render_frame(&mut buf, &query, cursor_pos, &results, selected, scroll_offset, cols, rows, entries.len(), &multi_select, label_map)?;
+            render_frame(&mut buf, &query, cursor_pos, &results, selected, scroll_offset, cols, rows, entries.len(), &multi_select, label_map, selection_counts)?;
             if show_help {
                 render_help(&mut buf, cols, rows)?;
             }
@@ -622,6 +624,7 @@ fn render_frame(
     total_count: usize,
     multi_select: &std::collections::HashSet<String>,
     label_map: &HashMap<String, Label>,
+    selection_counts: &HashMap<String, u32>,
 ) -> io::Result<()> {
     let max_items = (rows as usize).saturating_sub(5);
     let w = cols as usize;
@@ -711,12 +714,21 @@ fn render_frame(
             let label = label_map.get(&result.entry.command);
             let label_display = label.map(|l| l.display());
             let label_width = label_display.as_ref().map_or(0, |s| str_width(s) + 1); // +1 for leading space
-            let entry_width = content_w.saturating_sub(3).saturating_sub(label_width);
+            let is_top = matches!(label, Some(Label::Top { .. }));
+            let sel_count = if is_top { 0 } else { selection_counts.get(&result.entry.command).copied().unwrap_or(0) };
+            let count_display = if sel_count > 0 { format!("{sel_count}") } else { String::new() };
+            let count_width = if sel_count > 0 { str_width(&count_display) + 1 } else { 0 }; // +1 for leading space
+            let entry_width = content_w.saturating_sub(3).saturating_sub(label_width).saturating_sub(count_width);
             let written = render_entry(buf, result, entry_width, result_idx == selected)?;
 
-            // Pad remaining space and render label at right edge
+            // Pad remaining space and render count + label at right edge
             let pad = entry_width.saturating_sub(written);
             for _ in 0..pad { write!(buf, " ")?; }
+
+            if sel_count > 0 {
+                queue!(buf, SetForegroundColor(COLOR_DIM))?;
+                write!(buf, " {count_display}")?;
+            }
 
             if let Some(display) = &label_display {
                 let color = match label.unwrap() {

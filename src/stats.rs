@@ -211,6 +211,17 @@ pub fn selections_in_range(
     total
 }
 
+/// Compute total selection counts per command across all dates.
+pub fn total_selections(daily: &HashMap<String, HashMap<String, u32>>) -> HashMap<String, u32> {
+    let mut totals: HashMap<String, u32> = HashMap::new();
+    for cmds in daily.values() {
+        for (cmd, &count) in cmds {
+            *totals.entry(cmd.clone()).or_default() += count;
+        }
+    }
+    totals
+}
+
 /// Get all unique commands that appear in daily_selections.
 pub fn all_selected_commands(daily: &HashMap<String, HashMap<String, u32>>) -> Vec<String> {
     let mut cmds: std::collections::HashSet<String> = std::collections::HashSet::new();

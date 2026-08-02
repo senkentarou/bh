@@ -1,9 +1,15 @@
 name: Release
 
+# NOTE: Auto-triggers are temporarily disabled to stop runaway GitHub Actions
+# spending. To cut a release, uncomment the tag block below and push a v* tag.
+# A workflow_dispatch run cannot produce a usable release on its own: the
+# Package step derives the version from GITHUB_REF, which is refs/heads/* when
+# dispatched manually.
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
+  # push:
+  #   tags:
+  #     - "v*"
 
 permissions:
   contents: write

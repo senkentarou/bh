@@ -15,7 +15,7 @@ pub fn print_stats_text(stats_data: &Stats) {
 
     let days_tracked = stats::days_since(&earliest).unwrap_or(0);
 
-    println!("\u{1f4ca} bh stats (since {earliest}, {days_tracked} days)\n");
+    println!("bh stats (since {earliest}, {days_tracked} days)\n");
 
     // Top selected (last 30 days)
     let all_cmds = stats::all_selected_commands(&stats_data.daily_selections);
@@ -34,17 +34,10 @@ pub fn print_stats_text(stats_data: &Stats) {
         .collect();
     cmd_counts.sort_by(|a, b| b.1.cmp(&a.1));
 
-    // Compute labels for display
-    let labels = crate::labels::compute_labels(stats_data);
-
     if !cmd_counts.is_empty() {
         println!("Top selected (last 30 days):");
         for (i, (cmd, count)) in cmd_counts.iter().take(5).enumerate() {
-            let label = labels
-                .get(cmd)
-                .map(|l| format!("  {}", l.display()))
-                .unwrap_or_default();
-            println!("  {}. {:<30} \u{00d7}{}{}", i + 1, cmd, count, label);
+            println!("  {}. {:<30} \u{00d7}{}", i + 1, cmd, count);
         }
         println!();
     }
@@ -84,13 +77,9 @@ pub fn print_stats_text(stats_data: &Stats) {
         println!("Trending (last 7 days vs prev 7 days):");
         for (cmd, prev, recent) in trending.iter().take(5) {
             let pct = (*recent as f64 - *prev as f64) / *prev as f64 * 100.0;
-            let label = labels
-                .get(cmd)
-                .map(|l| format!("  {}", l.display()))
-                .unwrap_or_default();
             println!(
-                "  {:<30} \u{00d7}{} \u{2192} \u{00d7}{}  (+{:.0}%){}",
-                cmd, prev, recent, pct, label
+                "  {:<30} \u{00d7}{} \u{2192} \u{00d7}{}  (+{:.0}%)",
+                cmd, prev, recent, pct
             );
         }
         println!();

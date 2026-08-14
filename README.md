@@ -105,9 +105,9 @@ Score = `(recency × 0.6 + log(1 + frequency) × 0.4) × noise_penalty`
 | ≤ 20 results | Show all (including low-frequency) |
 | > 20 results | Cut entries below 50% of the top-third score |
 
-### Labels
+### Usage tracking
 
-Create `~/.config/bh/config.toml` to enable usage tracking and labels:
+Create `~/.config/bh/config.toml` to enable usage tracking:
 
 ```bash
 mkdir -p ~/.config/bh
@@ -121,18 +121,21 @@ An empty file enables the feature. To explicitly disable:
 enabled = false
 ```
 
-| Label | Condition |
-|---|---|
-| ✅ NEW | First seen within 1 day |
-| 🔥 HOT | Selections in last 7 days >= 5 and >= 2x previous week, or history frequency in top 5% with delta >= 3 |
-| ⭐ TOP | #1 most selected command in the last 30 days |
-| 💤 STALE | Frequency <= 2, first seen > 14 days ago, not selected in 30 days |
-
-Priority: HOT > TOP > NEW (STALE is overridden by any other label). Data is stored in `~/.bh/stats.json`.
+Enabling it adds a selection count on the right of each history entry, and stale
+detection for `C-g`. Data is stored in `~/.bh/stats.json`.
 
 ### Stale cleanup (C-g)
 
-`C-g` prompts to bulk-delete all 💤 STALE commands. Confirms with `y/N` before deleting.
+A command is stale when its frequency is <= 2, it was first seen more than 14 days
+ago, and it has not been selected in the last 30 days — unless one of these applies:
+
+| Exclusion | Condition |
+|---|---|
+| New | First seen within 1 day |
+| Hot | Selections in last 7 days >= 5 and >= 2x previous week, or history frequency in top 5% with delta >= 3 |
+| Top | #1 most selected command in the last 30 days |
+
+`C-g` prompts to bulk-delete all stale commands. Confirms with `y/N` before deleting.
 
 ### Keybindings
 
@@ -147,7 +150,7 @@ Press `C-?` / `C-/` to show the help overlay.
 | `Enter` | Select command |
 | `Tab` | Toggle multi-select |
 | `Shift-Tab` | Deselect + move up |
-| `C-g` | Bulk delete stale (💤) |
+| `C-g` | Bulk delete stale |
 | `C-x` | Delete selected |
 | `Esc` `C-c` `C-q` | Quit / clear selection |
 | `←` `→` | Move cursor |

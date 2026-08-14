@@ -37,10 +37,6 @@ const COLOR_CURSOR: Color = Color::Rgb { r: 200, g: 200, b: 200 };
 const COLOR_MULTI: Color = Color::Rgb { r: 255, g: 200, b: 60 };
 const COLOR_WARN_BG: Color = Color::Rgb { r: 120, g: 40, b: 40 };
 const COLOR_WARN_FG: Color = Color::Rgb { r: 255, g: 220, b: 220 };
-const COLOR_LABEL_NEW: Color = Color::Rgb { r: 80, g: 200, b: 200 };
-const COLOR_LABEL_HOT: Color = Color::Rgb { r: 255, g: 120, b: 80 };
-const COLOR_LABEL_TOP: Color = Color::Rgb { r: 255, g: 200, b: 60 };
-const COLOR_LABEL_STALE: Color = Color::Rgb { r: 120, g: 120, b: 120 };
 
 // ── TTY helpers ─────────────────────────────────────────────────────────
 
@@ -198,7 +194,7 @@ fn run_loop(
 
         if need_redraw {
             let mut buf: Vec<u8> = Vec::with_capacity(8192);
-            render_frame(&mut buf, &query, cursor_pos, &results, selected, scroll_offset, cols, rows, entries.len(), &multi_select, label_map, selection_counts)?;
+            render_frame(&mut buf, &query, cursor_pos, &results, selected, scroll_offset, cols, rows, entries.len(), &multi_select, selection_counts)?;
             if show_help {
                 render_help(&mut buf, cols, rows)?;
             }
@@ -316,14 +312,14 @@ fn run_loop(
                     .collect();
 
                 if targets.is_empty() {
-                    let prompt = " No stale (💤) entries found ";
+                    let prompt = " No stale entries found ";
                     show_prompt_bar(tty_w, tty_fd, prompt)?;
                     set_read_blocking(tty_fd);
                     let _ = input::read_key(tty_r)?;
                     set_read_timeout(tty_fd, 1);
                 } else {
                     let count = targets.len();
-                    let prompt = format!(" Delete {} stale (💤) entries? (y/N): ", count);
+                    let prompt = format!(" Delete {} stale entries? (y/N): ", count);
                     show_prompt_bar(tty_w, tty_fd, &prompt)?;
 
                     set_read_blocking(tty_fd);
@@ -445,114 +441,57 @@ const HELP_SHORTCUTS: &[(&str, &str)] = &[
     ("?  C-/",         "This help"),
 ];
 
-const HELP_LABELS: &[(&str, &str)] = &[
-    ("✅",  "New — first seen today"),
-    ("🔥",  "Hot — 7d >= 5 & 2x prev"),
-    ("⭐",  "Top — #1 in 30 days"),
-    ("💤",  "Stale — old & unused"),
-];
-
 const COLOR_HELP_BG: Color = Color::Rgb { r: 35, g: 35, b: 40 };
 
 fn render_help(buf: &mut Vec<u8>, cols: u16, rows: u16) -> io::Result<()> {
     // ── Layout constants ──
     let pad: usize = 3;
+    let key_w: usize = 16;
+    let gap: usize = 3;
+    let desc_w: usize = 19;
+    let inner: usize = pad + key_w + gap + desc_w + pad;
 
-    // Left panel: Shortcuts
-    let sk_key_w: usize = 16;
-    let sk_gap: usize = 3;
-    let sk_desc_w: usize = 19;
-    let sk_inner: usize = pad + sk_key_w + sk_gap + sk_desc_w + pad;
-
-    // Right panel: Labels
-    let lb_icon_w: usize = 2;  // emoji width
-    let lb_gap: usize = 2;
-    let lb_desc_w: usize = 24;
-    let lb_inner: usize = pad + lb_icon_w + lb_gap + lb_desc_w + pad;
-
-    let divider: usize = 1; // "│" between panels
-    let total_inner = sk_inner + divider + lb_inner;
-    let box_w = (total_inner + 2) as u16; // outer borders
-    let content_rows = HELP_SHORTCUTS.len().max(HELP_LABELS.len() + 2); // labels panel is shorter, vertically centered
+    let box_w = (inner + 2) as u16; // outer borders
+    let content_rows = HELP_SHORTCUTS.len();
     let box_h = content_rows as u16 + 6; // +2 top padding, +2 bottom (hint + blank), +2 border
     let x = cols.saturating_sub(box_w) / 2;
     let y = rows.saturating_sub(box_h) / 2;
 
     // ── Top border ──
-    let title_l = " Shortcuts ";
-    let title_r = " Labels ";
+    let title = " Shortcuts ";
     queue!(buf, cursor::MoveTo(x, y), SetBackgroundColor(COLOR_HELP_BG), SetForegroundColor(COLOR_BORDER))?;
     write!(buf, "╭")?;
     queue!(buf, SetForegroundColor(COLOR_TITLE))?;
-    write!(buf, "{title_l}")?;
+    write!(buf, "{title}")?;
     queue!(buf, SetForegroundColor(COLOR_BORDER))?;
-    let fill_between = sk_inner.saturating_sub(title_l.len());
-    for _ in 0..fill_between { write!(buf, "─")?; }
-    write!(buf, "┬")?;
-    queue!(buf, SetForegroundColor(COLOR_TITLE))?;
-    write!(buf, "{title_r}")?;
-    queue!(buf, SetForegroundColor(COLOR_BORDER))?;
-    let fill_right = lb_inner.saturating_sub(title_r.len());
-    for _ in 0..fill_right { write!(buf, "─")?; }
+    let fill = inner.saturating_sub(title.len());
+    for _ in 0..fill { write!(buf, "─")?; }
     write!(buf, "╮")?;
 
     // ── Top padding ──
     for r in 1..=2u16 {
         queue!(buf, cursor::MoveTo(x, y + r), SetBackgroundColor(COLOR_HELP_BG), SetForegroundColor(COLOR_BORDER))?;
         write!(buf, "│")?;
-        for _ in 0..sk_inner { write!(buf, " ")?; }
-        write!(buf, "│")?;
-        for _ in 0..lb_inner { write!(buf, " ")?; }
+        for _ in 0..inner { write!(buf, " ")?; }
         write!(buf, "│")?;
     }
 
     // ── Content rows ──
-    // Labels are vertically centered in the right panel
-    let lb_offset = (content_rows.saturating_sub(HELP_LABELS.len())) / 2;
-
     for i in 0..content_rows {
         let row = y + 3 + i as u16;
         queue!(buf, cursor::MoveTo(x, row), SetBackgroundColor(COLOR_HELP_BG), SetForegroundColor(COLOR_BORDER))?;
         write!(buf, "│")?;
 
-        // Left panel: shortcut
         if let Some((key, desc)) = HELP_SHORTCUTS.get(i) {
             queue!(buf, SetForegroundColor(COLOR_MATCH))?;
-            write!(buf, "{:>p$}{key:<kw$}", "", p = pad, kw = sk_key_w)?;
+            write!(buf, "{:>p$}{key:<kw$}", "", p = pad, kw = key_w)?;
             queue!(buf, SetForegroundColor(COLOR_DIM))?;
-            for _ in 0..sk_gap { write!(buf, " ")?; }
+            for _ in 0..gap { write!(buf, " ")?; }
             queue!(buf, SetForegroundColor(COLOR_TEXT))?;
-            write!(buf, "{desc:<dw$}", dw = sk_desc_w)?;
+            write!(buf, "{desc:<dw$}", dw = desc_w)?;
             for _ in 0..pad { write!(buf, " ")?; }
         } else {
-            for _ in 0..sk_inner { write!(buf, " ")?; }
-        }
-
-        queue!(buf, SetForegroundColor(COLOR_BORDER))?;
-        write!(buf, "│")?;
-
-        // Right panel: label
-        let lb_idx = i.checked_sub(lb_offset);
-        if let Some(idx) = lb_idx {
-            if let Some((icon, desc)) = HELP_LABELS.get(idx) {
-                let color = match idx {
-                    0 => COLOR_LABEL_NEW,
-                    1 => COLOR_LABEL_HOT,
-                    2 => COLOR_LABEL_TOP,
-                    _ => COLOR_LABEL_STALE,
-                };
-                for _ in 0..pad { write!(buf, " ")?; }
-                queue!(buf, SetForegroundColor(color))?;
-                write!(buf, "{icon}")?;
-                for _ in 0..lb_gap { write!(buf, " ")?; }
-                queue!(buf, SetForegroundColor(COLOR_TEXT))?;
-                write!(buf, "{desc:<dw$}", dw = lb_desc_w)?;
-                for _ in 0..pad { write!(buf, " ")?; }
-            } else {
-                for _ in 0..lb_inner { write!(buf, " ")?; }
-            }
-        } else {
-            for _ in 0..lb_inner { write!(buf, " ")?; }
+            for _ in 0..inner { write!(buf, " ")?; }
         }
 
         queue!(buf, SetForegroundColor(COLOR_BORDER))?;
@@ -563,17 +502,15 @@ fn render_help(buf: &mut Vec<u8>, cols: u16, rows: u16) -> io::Result<()> {
     let blank_row = y + 3 + content_rows as u16;
     queue!(buf, cursor::MoveTo(x, blank_row), SetBackgroundColor(COLOR_HELP_BG), SetForegroundColor(COLOR_BORDER))?;
     write!(buf, "│")?;
-    for _ in 0..sk_inner { write!(buf, " ")?; }
-    write!(buf, "│")?;
-    for _ in 0..lb_inner { write!(buf, " ")?; }
+    for _ in 0..inner { write!(buf, " ")?; }
     write!(buf, "│")?;
 
     // ── Hint row ──
     let hint_row = blank_row + 1;
     let hint = "Press any key to close";
     let hint_w = hint.len();
-    let pad_hint_l = total_inner.saturating_sub(hint_w) / 2;
-    let pad_hint_r = total_inner.saturating_sub(hint_w).saturating_sub(pad_hint_l);
+    let pad_hint_l = inner.saturating_sub(hint_w) / 2;
+    let pad_hint_r = inner.saturating_sub(hint_w).saturating_sub(pad_hint_l);
     queue!(buf, cursor::MoveTo(x, hint_row), SetBackgroundColor(COLOR_HELP_BG), SetForegroundColor(COLOR_BORDER))?;
     write!(buf, "│")?;
     queue!(buf, SetForegroundColor(COLOR_DIM))?;
@@ -587,9 +524,7 @@ fn render_help(buf: &mut Vec<u8>, cols: u16, rows: u16) -> io::Result<()> {
     let bot = hint_row + 1;
     queue!(buf, cursor::MoveTo(x, bot), SetBackgroundColor(COLOR_HELP_BG), SetForegroundColor(COLOR_BORDER))?;
     write!(buf, "╰")?;
-    for _ in 0..sk_inner { write!(buf, "─")?; }
-    write!(buf, "┴")?;
-    for _ in 0..lb_inner { write!(buf, "─")?; }
+    for _ in 0..inner { write!(buf, "─")?; }
     write!(buf, "╯")?;
 
     queue!(buf, SetAttribute(Attribute::Reset))?;
@@ -623,7 +558,6 @@ fn render_frame(
     rows: u16,
     total_count: usize,
     multi_select: &std::collections::HashSet<String>,
-    label_map: &HashMap<String, Label>,
     selection_counts: &HashMap<String, u32>,
 ) -> io::Result<()> {
     let max_items = (rows as usize).saturating_sub(5);
@@ -711,34 +645,19 @@ fn render_frame(
                 queue!(buf, SetForegroundColor(COLOR_TEXT))?;
                 write!(buf, "   ")?;
             }
-            let label = label_map.get(&result.entry.command);
-            let label_display = label.map(|l| l.display());
-            let label_width = label_display.as_ref().map_or(0, |s| str_width(s) + 1); // +1 for leading space
-            let is_top = matches!(label, Some(Label::Top { .. }));
-            let sel_count = if is_top { 0 } else { selection_counts.get(&result.entry.command).copied().unwrap_or(0) };
+            let sel_count = selection_counts.get(&result.entry.command).copied().unwrap_or(0);
             let count_display = if sel_count > 0 { format!("{sel_count}") } else { String::new() };
             let count_width = if sel_count > 0 { str_width(&count_display) + 1 } else { 0 }; // +1 for leading space
-            let entry_width = content_w.saturating_sub(3).saturating_sub(label_width).saturating_sub(count_width);
+            let entry_width = content_w.saturating_sub(3).saturating_sub(count_width);
             let written = render_entry(buf, result, entry_width, result_idx == selected)?;
 
-            // Pad remaining space and render count + label at right edge
+            // Pad remaining space and render count at right edge
             let pad = entry_width.saturating_sub(written);
             for _ in 0..pad { write!(buf, " ")?; }
 
             if sel_count > 0 {
                 queue!(buf, SetForegroundColor(COLOR_DIM))?;
                 write!(buf, " {count_display}")?;
-            }
-
-            if let Some(display) = &label_display {
-                let color = match label.unwrap() {
-                    Label::Stale => COLOR_LABEL_STALE,
-                    Label::New => COLOR_LABEL_NEW,
-                    Label::Hot { .. } => COLOR_LABEL_HOT,
-                    Label::Top { .. } => COLOR_LABEL_TOP,
-                };
-                queue!(buf, SetForegroundColor(color))?;
-                write!(buf, " {display}")?;
             }
             queue!(buf, SetAttribute(Attribute::Reset))?;
         }

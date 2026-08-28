@@ -1,123 +1,68 @@
 mod config;
-mod export;
 mod history;
 mod input;
 mod labels;
 mod stats;
-mod stats_display;
 mod tui;
 
 use std::collections::HashMap;
 use std::os::unix::io::AsRawFd;
 
-use clap::{Parser, Subcommand};
+const USAGE: &str = "bh — Interactive bash history search with smart ranking
 
-#[derive(Parser)]
-#[command(name = "bh", version = env!("CARGO_PKG_VERSION"), disable_version_flag = true, about = "Interactive bash history search with smart ranking")]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Command>,
+Usage: bh [OPTIONS]
 
-    /// Print version
-    #[arg(short = 'v', long = "version", action = clap::ArgAction::Version)]
-    version: (),
-
-    /// Output as JSON
-    #[arg(long, conflicts_with = "table")]
-    json: bool,
-
-    /// Output as table with summary stats
-    #[arg(long, conflicts_with = "json")]
-    table: bool,
-
-    /// Maximum number of entries (only with --json or --table)
-    #[arg(short = 'n', long)]
-    limit: Option<usize>,
-}
-
-#[derive(Subcommand)]
-enum Command {
-    /// Show usage statistics
-    Stats {
-        /// Reset stats by deleting ~/.bh/stats.json
-        #[arg(long)]
-        reset: bool,
-
-        /// Output stats as JSON
-        #[arg(long)]
-        json: bool,
-    },
-}
+Options:
+  -v, --version  Print version
+  -h, --help     Print help";
 
 fn main() {
-    let cli = Cli::parse();
+    for arg in std::env::args().skip(1) {
+        match arg.as_str() {
+            "-v" | "--version" => {
+                println!("bh {}", env!("CARGO_PKG_VERSION"));
+                return;
+            }
+            "-h" | "--help" => {
+                println!("{USAGE}");
+                return;
+            }
+            _ => {
+                eprintln!("bh: unrecognized argument '{arg}'\n\n{USAGE}");
+                std::process::exit(2);
+            }
+        }
+    }
+
     let config = config::load_config();
     let stats_enabled = config.as_ref().is_some_and(|c| c.stats.enabled);
 
-    // Handle stats subcommand
-    if let Some(Command::Stats { reset, json }) = cli.command {
-        if reset {
-            let path = stats::stats_path();
-            if path.exists() {
-                if let Err(e) = std::fs::remove_file(&path) {
-                    eprintln!("Failed to delete {}: {e}", path.display());
-                    std::process::exit(1);
-                }
-                eprintln!("Stats reset: deleted {}", path.display());
-            } else {
-                eprintln!("No stats file found at {}", path.display());
-            }
-            return;
-        }
-
-        let stats_data = stats::load_stats();
-        if json {
-            stats_display::print_stats_json(&stats_data);
-        } else {
-            stats_display::print_stats_text(&stats_data);
-        }
-        return;
-    }
-
     let entries = history::load_history();
 
-    if cli.json || cli.table {
-        let entries = if let Some(n) = cli.limit {
-            entries.into_iter().take(n).collect()
-        } else {
-            entries
-        };
-        if cli.json {
-            export::export_json(&entries);
-        } else {
-            export::export_table(&entries);
-        }
+    let selected = if stats_enabled {
+        let mut stats_data = stats::load_stats();
+        let commands: Vec<String> = entries.iter().map(|e| e.command.clone()).collect();
+        stats::update_first_seen(&mut stats_data, &commands);
+        stats::update_snapshot(&mut stats_data, &entries);
+        stats::prune_old_data(&mut stats_data);
+        let label_map = labels::compute_labels_with(&stats_data, &entries);
+        let selection_counts = stats::total_selections(&stats_data.daily_selections);
+
+        let result = tui::run(entries, Some(&mut stats_data), &label_map, &selection_counts);
+        stats::save_stats(&stats_data);
+        result
     } else {
-        let selected = if stats_enabled {
-            let mut stats_data = stats::load_stats();
-            let commands: Vec<String> = entries.iter().map(|e| e.command.clone()).collect();
-            stats::update_first_seen(&mut stats_data, &commands);
-            stats::update_snapshot(&mut stats_data, &entries);
-            stats::prune_old_data(&mut stats_data);
-            let label_map = labels::compute_labels_with(&stats_data, &entries);
-            let selection_counts = stats::total_selections(&stats_data.daily_selections);
+        let empty_labels = HashMap::new();
+        let empty_counts = HashMap::new();
+        tui::run(entries, None, &empty_labels, &empty_counts)
+    };
 
-            let result = tui::run(entries, Some(&mut stats_data), &label_map, &selection_counts);
-            stats::save_stats(&stats_data);
-            result
-        } else {
-            let empty_labels = HashMap::new();
-            let empty_counts = HashMap::new();
-            tui::run(entries, None, &empty_labels, &empty_counts)
-        };
-
-        match selected {
-            Ok(Some(cmd)) => output_command(&cmd),
-            Ok(None) => {}
-            Err(e) => {
-                eprintln!("Error: {e}");
-                std::process::exit(1);
-            }
+    match selected {
+        Ok(Some(cmd)) => output_command(&cmd),
+        Ok(None) => {}
+        Err(e) => {
+            eprintln!("Error: {e}");
+            std::process::exit(1);
         }
     }
 }

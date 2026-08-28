@@ -41,8 +41,10 @@ git tag "$tag"
 git push origin main "$tag"
 gh release create "$tag" --title "$tag" --generate-notes "$tarball"
 
-# The formula is generated rather than patched in place: it keeps the version,
-# URL and checksum from ever drifting apart, and lets the tap start out empty.
+# The formula is generated rather than patched in place: it keeps the URL and
+# checksum from ever drifting apart, and lets the tap start out empty. No
+# `version` field — Homebrew scans it from the tag in the URL, and stating it
+# again is what `brew audit --strict` calls redundant.
 echo "Updating $tap_repo ..."
 sha=$(shasum -a 256 "$tarball" | cut -d ' ' -f 1)
 tap_dir=$(mktemp -d)
@@ -54,7 +56,6 @@ class Bh < Formula
   desc "Fast, interactive bash history search with fuzzy matching and smart ranking"
   homepage "https://github.com/${repo}"
   url "https://github.com/${repo}/releases/download/${tag}/${archive}.tar.gz"
-  version "${version}"
   sha256 "${sha}"
   license "MIT"
 

@@ -2,9 +2,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-use serde::Serialize;
-
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct HistoryEntry {
     pub command: String,
     pub frequency: usize,

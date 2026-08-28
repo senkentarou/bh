@@ -41,19 +41,8 @@ cargo install --path .
 # Interactive TUI (executes selected command directly when stdout is a TTY)
 bh
 
-# Table output with summary stats
-bh --table
-
-# JSON output (useful for AI analysis)
-bh --json
-
-# Limit to top N entries
-bh --json -n 50
-
-# Usage statistics
-bh stats
-bh stats --json
-bh stats --reset
+# Print version
+bh -v
 ```
 
 ### Shell integration (Ctrl-R)
@@ -133,7 +122,8 @@ enabled = false
 ```
 
 Enabling it adds a selection count on the right of each history entry, and stale
-detection for `C-g`. Data is stored in `~/.bh/stats.json`.
+detection for `C-g`. Data is stored in `~/.bh/stats.json` — delete that file to
+reset the tracking.
 
 ### Stale cleanup (C-g)
 
@@ -169,40 +159,6 @@ Press `C-?` / `C-/` to show the help overlay.
 | `C-l` | Delete to end of line |
 | `C-?` `C-/` | Help |
 
-### Export
-
-#### Table (`--table`)
-
-```
-Rank   Freq     Command
-------------------------------------------------------------
-1      86       claude
-2      50       cargo tauri dev
-3      45       bun dev
-
-Total unique commands: 150
-Total executions: 1200
-Single-use commands: 80 (53%)
-
-Top 20 base commands:
-   120x  bun
-    96x  claude
-    56x  cargo
-```
-
-#### JSON (`--json`)
-
-```json
-[
-  {
-    "command": "claude",
-    "frequency": 86,
-    "recency_rank": 0,
-    "score": 2.385
-  }
-]
-```
-
 ## Release
 
 `release.sh` runs the whole release locally — build, package, publish the
@@ -225,8 +181,8 @@ Reads `~/.bash_history`. Write operations are `C-x` (delete selected) and `C-g` 
 
 - Rust (2024 edition)
 - [crossterm](https://github.com/crossterm-rs/crossterm) — terminal control
-- [clap](https://github.com/clap-rs/clap) — CLI argument parsing
-- No async runtime, no TUI framework — raw escape sequences for minimal overhead
+- No async runtime, no TUI framework, no argument parser — raw escape sequences
+  for minimal overhead
 
 ## License
 

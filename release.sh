@@ -15,8 +15,10 @@ if git rev-parse "$tag" >/dev/null 2>&1; then
 fi
 
 # A dirty tree would make the tag point at something other than what gets built.
-if [ -n "$(git status --porcelain)" ]; then
-  echo "Error: working tree is dirty"
+# Untracked files are excluded: ww keeps its task notes in an untracked .ww/,
+# which is always present and would otherwise block every release.
+if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
+  echo "Error: working tree has uncommitted changes"
   exit 1
 fi
 

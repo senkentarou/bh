@@ -5,16 +5,27 @@ A lightweight Rust TUI alternative to `Ctrl-R`.
 
 ## Install
 
-### Pre-built binary (recommended)
-
-Download the latest binary from [GitHub Releases](../../releases/latest) and place it in your `PATH`:
+### Homebrew (recommended)
 
 ```bash
-# Apple Silicon Mac
-curl -sL https://github.com/senkentarou/bh/releases/latest/download/bh-v0.1.0-aarch64-apple-darwin.tar.gz | tar xz
-sudo mv bh-v0.1.0-aarch64-apple-darwin/bh /usr/local/bin/
+brew install senkentarou/tap/bh
+```
 
-# Bypass macOS Gatekeeper warning if needed
+Apple Silicon Mac only.
+
+### Pre-built binary
+
+```bash
+curl -sL https://github.com/senkentarou/bh/releases/latest/download/bh-aarch64-apple-darwin.tar.gz | tar xz
+sudo mv bh-aarch64-apple-darwin/bh /usr/local/bin/
+```
+
+The binary is unsigned. `curl` and Homebrew do not mark downloads with
+`com.apple.quarantine`, so neither path trips Gatekeeper. Downloading the
+tarball through a browser does mark it, and macOS then refuses to run the
+binary — clear the attribute in that case:
+
+```bash
 xattr -cr /usr/local/bin/bh
 ```
 
@@ -193,6 +204,11 @@ Top 20 base commands:
 ```
 
 ## Release
+
+`release.sh` runs the whole release locally — build, package, publish the
+GitHub release, and regenerate the formula in
+[senkentarou/homebrew-tap](https://github.com/senkentarou/homebrew-tap). No CI
+is involved.
 
 ```bash
 # 1. Update version in Cargo.toml

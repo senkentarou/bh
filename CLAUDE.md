@@ -3,7 +3,7 @@
 <!-- task-flow -->
 ## タスク運用
 
-タスクの真実源は `.ww/tasks/*.md`（YAML front matter 付きの Markdown。Ideal が読み書きする）。
+タスクの真実源は `.ideal/tasks/*.md`（YAML front matter 付きの Markdown。Ideal が読み書きする）。
 着手 / 提出 / 完了は skill で行う: `/task-start <ノートのパス|id>` → `/task-submit` → `/task-done`。
 
 - **ゲート**（`/task-submit` が commit の前に通す）: `cargo fmt --check` / `cargo clippy --all-targets` / `cargo test`
